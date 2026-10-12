@@ -30,8 +30,8 @@ end are never treated as process start or kill.
 | Adapter ID | Mode | Auto-start | Notes |
 | --- | --- | --- | --- |
 | `manual_report` | L0 manual/client report | no | `ExternalExecutionReport` via `awr execution report` |
-| `codex_cli` | Named controlled | yes (capability-flagged) | Full matrix including start/stop confirmation |
-| `claude_code` | Named controlled | **no** | Status, reconnect, forensics; start via human/L0 |
+| `codex_cli` | Named controlled | **no** | Status and forensics from L0 reports; start via human/L0 |
+| `claude_code` | Named controlled | **no** | Status and forensics from L0 reports; start via human/L0 |
 
 Fixture and unit coverage verify both named clients are usable for negotiation
 even when process launch is stubbed behind capability flags.

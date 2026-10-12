@@ -55,7 +55,7 @@ delivery in the client — until then, checkpoint manually before handoff or com
 
 Claude Code connects through a named controlled adapter (adapter id `claude_code`). It is not
 auto-startable: AWR will not launch Claude Code for you, and it will not stop it on its own — those
-steps stay with you. What the adapter does support is reading status, reconnect/resume, and result
+steps stay with you. What the adapter does support is reading status and collecting result
 forensics.
 
 Operator path:
