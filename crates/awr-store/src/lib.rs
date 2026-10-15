@@ -133,7 +133,46 @@ pub struct MigrationInfo {
 }
 
 pub(crate) fn db_error(error: rusqlite::Error) -> Error {
-    Error::Storage(error.to_string())
+    Error::Storage(storage_error_detail(None, error))
+}
+
+/// Wrap a SQLite error with the failing operation and database path so that
+/// low-level failures (disk I/O, permissions, sandbox denials) carry a
+/// diagnosable context instead of a bare "disk I/O error".
+pub(crate) fn db_error_at(operation: &str, path: &Path, error: rusqlite::Error) -> Error {
+    Error::Storage(storage_error_detail(Some((operation, path)), error))
+}
+
+fn storage_error_detail(context: Option<(&str, &Path)>, error: rusqlite::Error) -> String {
+    let mut detail = match context {
+        Some((operation, path)) => format!("sqlite {operation} on {}: {error}", path.display()),
+        None => error.to_string(),
+    };
+    let hint = match error.sqlite_error_code() {
+        Some(rusqlite::ffi::ErrorCode::SystemIoFailure)
+        | Some(rusqlite::ffi::ErrorCode::DiskFull)
+        | Some(rusqlite::ffi::ErrorCode::CannotOpen)
+        | Some(rusqlite::ffi::ErrorCode::PermissionDenied) => Some(
+            "the database file or its directory is not writable (check disk space, file permissions, and OS file-access or sandbox policies)",
+        ),
+        Some(rusqlite::ffi::ErrorCode::ReadOnly) => {
+            Some("the database was opened read-only; writes require a writable database path")
+        }
+        Some(rusqlite::ffi::ErrorCode::DatabaseCorrupt)
+        | Some(rusqlite::ffi::ErrorCode::NotADatabase) => Some(
+            "the file may not be an AWR SQLite database or is damaged; run doctor to inspect it",
+        ),
+        Some(rusqlite::ffi::ErrorCode::DatabaseBusy)
+        | Some(rusqlite::ffi::ErrorCode::DatabaseLocked) => {
+            Some("another process holds the database lock; retry after it exits")
+        }
+        _ => None,
+    };
+    if let Some(hint) = hint {
+        detail.push_str("; ");
+        detail.push_str(hint);
+    }
+    detail
 }
 
 impl Store {
@@ -188,7 +227,7 @@ impl Store {
             return Err(Error::NotFound(format!("AWR database: {}", path.display())));
         }
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(db_error)?;
+            .map_err(|error| db_error_at("open read-only", path, error))?;
         Self::configure(&conn)?;
         let owner: i64 = conn
             .pragma_query_value(None, "application_id", |r| r.get(0))
@@ -216,7 +255,7 @@ impl Store {
             return Err(Error::NotFound(format!("AWR database: {}", path.display())));
         }
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(db_error)?;
+            .map_err(|error| db_error_at("open read-write", path, error))?;
         Self::configure(&conn)?;
         let owner: i64 = conn
             .pragma_query_value(None, "application_id", |r| r.get(0))
@@ -240,8 +279,10 @@ impl Store {
     /// Create or reopen an AWR database. Refuse unrelated databases.
     pub fn open(path: &Path) -> Result<Self> {
         let lease = RuntimeLease::shared(path, true)?;
-        let mut store =
-            Self::initialize_connection(Connection::open(path).map_err(db_error)?, true)?;
+        let mut store = Self::initialize_connection(
+            Connection::open(path).map_err(|error| db_error_at("create or open", path, error))?,
+            true,
+        )?;
         store.runtime_lease = lease;
         Ok(store)
     }
@@ -278,7 +319,9 @@ impl Store {
         let snapshot = preview_snapshot::Files::capture(path, max_bytes)?;
         let conn =
             Connection::open_with_flags(&snapshot.database, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .map_err(db_error)?;
+                .map_err(|error| {
+                    db_error_at("open snapshot read-only", &snapshot.database, error)
+                })?;
         Self::configure(&conn)?;
         let owner: i64 = conn
             .pragma_query_value(None, "application_id", |r| r.get(0))
@@ -526,7 +569,7 @@ impl Store {
             return Err(Error::NotFound(format!("AWR database: {}", path.display())));
         }
         let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(db_error)?;
+            .map_err(|error| db_error_at("open read-only", path, error))?;
         Self::configure(&conn)?;
         Self {
             conn,
@@ -655,3 +698,39 @@ pub mod agent_authorization;
 mod content_review;
 mod responsibility;
 pub use agent_authorization::AuthorizationReceipt;
+
+#[cfg(test)]
+mod storage_error_tests {
+    use super::*;
+
+    #[test]
+    fn opening_a_non_database_file_names_the_file_and_the_likely_cause() {
+        let directory =
+            std::env::temp_dir().join(format!("awr-store-diag-{}", awr_core::Id::new()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("state.db");
+        std::fs::write(&path, b"definitely not sqlite").unwrap();
+        let error = match Store::open_readonly(&path) {
+            Err(Error::Storage(detail)) => detail,
+            other => panic!("expected a storage error"),
+        };
+        std::fs::remove_dir_all(&directory).unwrap();
+        // The failure surfaces from the schema probe after a successful open,
+        // so the hint (not the path prefix) is the diagnosable part here.
+        assert!(error.contains("not be an AWR SQLite database"), "{error}");
+    }
+
+    #[test]
+    fn io_failure_codes_carry_a_root_cause_hint() {
+        let error = rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_IOERR),
+            Some("disk I/O error".into()),
+        );
+        let detail = match db_error(error) {
+            Error::Storage(detail) => detail,
+            other => panic!("expected storage, got {other:?}"),
+        };
+        assert!(detail.contains("disk I/O error"), "{detail}");
+        assert!(detail.contains("not writable"), "{detail}");
+    }
+}
