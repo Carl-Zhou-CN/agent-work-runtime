@@ -247,3 +247,69 @@ fn resume_preflight_uses_the_source_sessions_scoped_branch() {
     drop(store);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn evidence_report_read_tolerates_a_single_trailing_newline_from_editors() {
+    let mut f = Fixture::new();
+    let body: &[u8] = b"Synthetic report";
+    let locator = "report-newline.txt";
+    let evidence = f
+        .store
+        .record_evidence(
+            f.project,
+            f.rev(),
+            EvidenceDraft {
+                work_item_key: Some("W1".into()),
+                external_key: "E-NL".into(),
+                evidence_type: "report".into(),
+                level: EvidenceLevel::Designed,
+                summary: "Newline tolerant evidence".into(),
+                locator: locator.into(),
+                sha256: Some(format!("{:x}", Sha256::digest(body))),
+                source_sha: None,
+                command: None,
+                scope: vec!["W1".into()],
+                branch_id: None,
+                verified_at: None,
+            },
+        )
+        .unwrap()
+        .0;
+    let denied = f.access(&[0]);
+    let allowed = f.access(&[1]);
+    let selector = WorkstreamReadSelection::default();
+    let runtime = Runtime::attach(&mut f.store, f.project).unwrap();
+    assert!(matches!(
+        runtime.read_evidence_report_in_workstream(&denied, &selector, &evidence.external_key, 100),
+        Err(Error::Workstream(WorkstreamError::AccessDenied))
+    ));
+    // An editor or lint tool appended one LF after registration: still reads.
+    fs::write(f.root.join(locator), b"Synthetic report\n").unwrap();
+    let runtime = Runtime::attach(&mut f.store, f.project).unwrap();
+    let (_, bytes) = runtime
+        .read_evidence_report_in_workstream(&allowed, &selector, &evidence.external_key, 100)
+        .unwrap();
+    assert_eq!(bytes, b"Synthetic report\n");
+    // A single appended CRLF is tolerated the same way.
+    fs::write(f.root.join(locator), b"Synthetic report\r\n").unwrap();
+    let runtime = Runtime::attach(&mut f.store, f.project).unwrap();
+    let (_, bytes) = runtime
+        .read_evidence_report_in_workstream(&allowed, &selector, &evidence.external_key, 100)
+        .unwrap();
+    assert_eq!(bytes, b"Synthetic report\r\n");
+    // Real content changes still fail, naming both digests.
+    fs::write(f.root.join(locator), b"Synthetic report\nX").unwrap();
+    let runtime = Runtime::attach(&mut f.store, f.project).unwrap();
+    match runtime.read_evidence_report_in_workstream(
+        &allowed,
+        &selector,
+        &evidence.external_key,
+        100,
+    ) {
+        Err(Error::SourceConflict(message)) => {
+            assert!(message.contains("expected"), "{message}");
+            assert!(message.contains("actual"), "{message}");
+        }
+        other => panic!("expected a source conflict, got {other:?}"),
+    }
+}
