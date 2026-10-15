@@ -25,9 +25,7 @@ fn source_path(root: &Path, path: &Path) -> Result<(PathBuf, PathBuf, String)> {
     }
     .canonicalize()?;
     // Review is intentionally local to this project. External/Git sources retain strict guards.
-    if !path.starts_with(&root)
-        || (path.starts_with(root.join(".awr")) && !path.starts_with(root.join(".awr/intake")))
-    {
+    if !path.starts_with(&root) || crate::is_runtime_owned_path(&root, &path) {
         return Err(Error::RuleViolation("content review requires a file inside the project, outside runtime state (authored .awr/intake files are supported)".into()));
     }
     let locator = Url::from_file_path(&path)

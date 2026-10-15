@@ -144,9 +144,9 @@ pub fn prepare_yaml_mutation(
     let Locator::File(path) = locator else {
         return Err(unsupported("Git sources remain read-only"));
     };
-    if path.starts_with(root.canonicalize()?.join(".awr")) {
+    if crate::is_runtime_owned_path(&root.canonicalize()?, &path) {
         return Err(unsupported(
-            "runtime-owned files cannot be source mutation targets",
+            "runtime-owned files cannot be source mutation targets; relocate authored documents outside .awr (except .awr/intake) and reindex",
         ));
     }
     if before.fingerprint != proposal.base_fingerprint {

@@ -56,7 +56,8 @@ pub use publish_prep::{
 };
 mod safe_fs;
 pub use manifest::{
-    ContextProfile, Manifest, ProjectConfig, SOURCE_ADAPTERS, SourceSpec, minimal_context,
+    ContextProfile, Manifest, ProjectConfig, SOURCE_ADAPTERS, SourceSpec, is_runtime_owned_path,
+    minimal_context,
 };
 pub use markdown::{
     MarkdownHeadingAdapter, MarkdownRulesAdapter, MarkdownSection, markdown_sections,

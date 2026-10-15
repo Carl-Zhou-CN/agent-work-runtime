@@ -25,8 +25,12 @@ impl Fixture {
         let source = match mode {
             "external" => outside.join("work.yaml"),
             "runtime" => root.join(".awr/work.yaml"),
+            "intake" => root.join(".awr/intake/work.yaml"),
             _ => root.join("work.yaml"),
         };
+        if mode == "intake" {
+            fs::create_dir_all(root.join(".awr/intake")).unwrap();
+        }
         fs::write(&source, WORK).unwrap();
         fs::write(outside.join("unrelated.txt"), "OUTSIDE_UNRELATED_CONTENT").unwrap();
         let manifest = format!(
@@ -244,4 +248,27 @@ fn runtime_owned_source_is_never_an_automatic_write_target() {
     f.error(&result, "proposal_required");
     assert_eq!(fs::read(&f.source).unwrap(), WORK.as_bytes());
     println!("AWR_PATH_CASE runtime_source_write");
+}
+
+#[test]
+fn authored_intake_sources_are_writable_targets() {
+    let f = Fixture::new("intake");
+    let before = fs::read(&f.source).unwrap();
+    let id = f.approved();
+    let result = f.review("apply", &id);
+    assert!(
+        result.status.success(),
+        "{} {}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let body: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(body["proposal"]["status"], "applied");
+    assert_eq!(body["source_write_performed"], true);
+    assert_ne!(fs::read(&f.source).unwrap(), before);
+    assert_eq!(
+        f.ok(&["work", "show", "W"])["work"]["next_action"],
+        "Read the revised draft"
+    );
+    println!("AWR_PATH_CASE authored_intake_write");
 }

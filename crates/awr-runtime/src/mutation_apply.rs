@@ -550,9 +550,9 @@ fn apply_observed(
                 "Git sources remain read-only".into(),
             ));
         };
-        if path.starts_with(root.join(".awr")) {
+        if awr_source::is_runtime_owned_path(root, &path) {
             return Err(Error::RuleViolation(
-                "runtime-owned files cannot be rewritten".into(),
+                "runtime-owned files cannot be rewritten; relocate authored documents outside .awr (except .awr/intake) and reindex".into(),
             ));
         }
         if snapshot.fingerprint == attempt.plan.before_fingerprint {
