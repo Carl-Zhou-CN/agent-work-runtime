@@ -150,6 +150,11 @@ const PREFIX: &str = ".awr/intake/";
 /// Deepest directory level the intake walk descends into. Subtrees below this
 /// are skipped and reported as observations instead of failing the intake.
 const DEPTH_LIMIT: usize = 12;
+/// Directory names never descended into during intake. SKIP matches at any
+/// depth, so only unambiguous framework/dependency output names belong here;
+/// ambiguous names (vendor, coverage, Pods) are walked so authored documents
+/// under them are still indexed, and overly deep trees are handled by the
+/// depth skip above, which reports every skipped subtree as an observation.
 const SKIP: &[&str] = &[
     ".git",
     ".awr",
@@ -170,12 +175,9 @@ const SKIP: &[&str] = &[
     ".svelte-kit",
     ".turbo",
     ".parcel-cache",
-    "coverage",
     ".gradle",
     ".terraform",
     ".dart_tool",
-    "vendor",
-    "Pods",
     ".cache",
 ];
 fn document(path: &Path) -> bool {
@@ -338,8 +340,13 @@ fn draft(root: &Path, goal: Option<&str>) -> Result<IntakeDraft> {
         if skipped.len() > 3 {
             examples.push_str(", …");
         }
+        let (count_phrase, verb) = if skipped.len() == 1 {
+            ("1 directory subtree".to_string(), "was")
+        } else {
+            (format!("{} directory subtrees", skipped.len()), "were")
+        };
         observations.push(format!(
-            "Directory subtrees deeper than {DEPTH_LIMIT} levels were skipped during intake (for example: {examples}); provide an explicit source manifest if authoritative documents live below that depth."
+            "{count_phrase} deeper than {DEPTH_LIMIT} levels {verb} skipped during intake (for example: {examples}); provide an explicit source manifest if authoritative documents live below that depth."
         ));
     }
     // Recognize conventional non-standard filenames without guessing arbitrary YAML schemas.

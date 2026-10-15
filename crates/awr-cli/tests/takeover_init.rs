@@ -193,7 +193,7 @@ fn deep_directories_are_skipped_with_an_observation_instead_of_failing() {
             .any(|o| {
                 o.as_str()
                     .unwrap()
-                    .contains("deeper than 12 levels were skipped")
+                    .contains("1 directory subtree deeper than 12 levels was skipped")
             })
     );
     p.ok(&[
@@ -206,6 +206,35 @@ fn deep_directories_are_skipped_with_an_observation_instead_of_failing() {
         p.ok(&["work", "show", "INTAKE-001"])
             .to_string()
             .contains("Verify project goals")
+    );
+}
+
+#[test]
+fn authored_documents_under_ambiguous_directory_names_are_still_indexed() {
+    let p = Project::new();
+    p.write("README.md", "# Document portal\n");
+    // Ambiguous names (vendor/coverage/Pods) match authored content at any
+    // depth, so SKIP must not swallow documents under them; only unambiguous
+    // build output names are skipped.
+    p.write("docs/vendor/notes.md", "# Vendored notes\n");
+    p.write("policy/coverage/report.md", "# Coverage policy\n");
+    p.write("guides/Pods/setup.md", "# Pods guide\n");
+    let preview = p.ok(&["init"]);
+    assert_eq!(preview["status"], "preview");
+    let paths: Vec<&str> = preview["draft"]["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "README.md",
+            "docs/vendor/notes.md",
+            "guides/Pods/setup.md",
+            "policy/coverage/report.md",
+        ]
     );
 }
 
