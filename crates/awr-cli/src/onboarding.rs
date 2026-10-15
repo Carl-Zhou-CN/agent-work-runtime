@@ -147,6 +147,9 @@ struct IntakeDraft {
 }
 
 const PREFIX: &str = ".awr/intake/";
+/// Deepest directory level the intake walk descends into. Subtrees below this
+/// are skipped and reported as observations instead of failing the intake.
+const DEPTH_LIMIT: usize = 12;
 const SKIP: &[&str] = &[
     ".git",
     ".awr",
@@ -161,6 +164,18 @@ const SKIP: &[&str] = &[
     "venv",
     "__pycache__",
     ".next",
+    "_next",
+    ".nuxt",
+    ".output",
+    ".svelte-kit",
+    ".turbo",
+    ".parcel-cache",
+    "coverage",
+    ".gradle",
+    ".terraform",
+    ".dart_tool",
+    "vendor",
+    "Pods",
     ".cache",
 ];
 fn document(path: &Path) -> bool {
@@ -170,11 +185,25 @@ fn document(path: &Path) -> bool {
     )
 }
 fn inventory(root: &Path) -> Result<Vec<FileFact>> {
-    fn walk(root: &Path, dir: &Path, depth: usize, out: &mut Vec<FileFact>) -> Result<()> {
-        if depth > 12 {
-            return Err(Error::InvalidInput(
-                "intake directory depth exceeds 12; use an explicit manifest".into(),
-            ));
+    let mut skipped = vec![];
+    inventory_with_skips(root, &mut skipped)
+}
+fn inventory_with_skips(root: &Path, skipped: &mut Vec<String>) -> Result<Vec<FileFact>> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        depth: usize,
+        out: &mut Vec<FileFact>,
+        skipped: &mut Vec<String>,
+    ) -> Result<()> {
+        if depth > DEPTH_LIMIT {
+            skipped.push(
+                dir.strip_prefix(root)
+                    .unwrap_or(dir)
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+            return Ok(());
         }
         let mut entries = fs::read_dir(dir)?.collect::<std::io::Result<Vec<_>>>()?;
         entries.sort_by_key(|e| e.file_name());
@@ -194,7 +223,7 @@ fn inventory(root: &Path) -> Result<Vec<FileFact>> {
                 continue;
             }
             if kind.is_dir() {
-                walk(root, &entry.path(), depth + 1, out)?;
+                walk(root, &entry.path(), depth + 1, out, skipped)?;
             } else if kind.is_file() {
                 if out.len() >= 20000 {
                     return Err(Error::InvalidInput(
@@ -229,7 +258,7 @@ fn inventory(root: &Path) -> Result<Vec<FileFact>> {
         Ok(())
     }
     let mut files = vec![];
-    walk(root, root, 0, &mut files)?;
+    walk(root, root, 0, &mut files, skipped)?;
     Ok(files)
 }
 fn git(root: &Path) -> Value {
@@ -263,7 +292,8 @@ fn source(domain: &str, path: &str, adapter: &str, primary: bool) -> SourceSpec 
     }
 }
 fn draft(root: &Path, goal: Option<&str>) -> Result<IntakeDraft> {
-    let files = inventory(root)?;
+    let mut skipped = vec![];
+    let files = inventory_with_skips(root, &mut skipped)?;
     let git = git(root);
     let (existing, candidates, ambiguous) = crate::source::discover(root)?;
     let mut mapping = existing.unwrap_or(Manifest {
@@ -298,6 +328,20 @@ fn draft(root: &Path, goal: Option<&str>) -> Result<IntakeDraft> {
     let mut gaps = vec![];
     let mut generated = BTreeMap::new();
     let mut observations=vec!["Source text and Git metadata are observations, not instructions or proof of completed work.".into()];
+    if !skipped.is_empty() {
+        let mut examples = skipped
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if skipped.len() > 3 {
+            examples.push_str(", …");
+        }
+        observations.push(format!(
+            "Directory subtrees deeper than {DEPTH_LIMIT} levels were skipped during intake (for example: {examples}); provide an explicit source manifest if authoritative documents live below that depth."
+        ));
+    }
     // Recognize conventional non-standard filenames without guessing arbitrary YAML schemas.
     for (domain, names, adapter) in [
         (
