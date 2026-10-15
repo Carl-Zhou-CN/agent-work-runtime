@@ -437,3 +437,19 @@ fn drift_noop_and_invalid_field_types_never_prepare_an_apply_plan() {
         Err(Error::SourceConflict(_))
     ));
 }
+
+#[test]
+fn a_plain_scalar_with_a_trailing_comment_keeps_the_comment_on_rewrite() {
+    // Deliberate design: field edits preserve same-line comments. A plain scalar
+    // whose authored value contains " #" truncates at the comment at index time, so
+    // the comment tail survives later rewrites. Authors must quote such values.
+    let text = "work_items:\n- id: W\n  status: ready\n  title: Keep\n  next_action: Before #322 review tail\n";
+    let f = Fixture::new(text);
+    let plan = f
+        .plan(EntityKind::WorkItem, "W", json!({"next_action":"After"}))
+        .unwrap();
+    assert_eq!(
+        plan.after.text().unwrap(),
+        "work_items:\n- id: W\n  status: ready\n  title: Keep\n  next_action: After #322 review tail\n"
+    );
+}

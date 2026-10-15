@@ -55,7 +55,9 @@ pub enum Error {
         attempt_event_id: crate::Id,
         reason: String,
     },
-    #[error("work action proposal {proposal_id} stopped during {stage}: {reason}")]
+    #[error(
+        "work action proposal {proposal_id} stopped during {stage}: {reason}; inspect `awr doctor` findings and, for an interrupted application, close it with `awr proposal recover {proposal_id} --actor <actor> --reason <reason> --expected-revision <current revision>` before retrying"
+    )]
     WorkActionIncomplete {
         proposal_id: crate::Id,
         stage: String,
