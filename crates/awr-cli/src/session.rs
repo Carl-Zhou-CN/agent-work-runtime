@@ -62,6 +62,13 @@ pub enum SessionCommand {
         claim: bool,
         #[arg(long, requires = "claim")]
         ttl_ms: Option<u64>,
+        /// Host client id for the conversation binding (MCP-compatible).
+        #[arg(long, requires = "conversation")]
+        client: Option<String>,
+        /// Host conversation id; binds this session so the MCP channel
+        /// resolves the same session without a separate client bind.
+        #[arg(long, requires = "client")]
+        conversation: Option<String>,
         #[arg(long)]
         expected_revision: Revision,
     },
@@ -291,8 +298,21 @@ pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<(
             model,
             claim,
             ttl_ms,
+            client,
+            conversation,
             expected_revision,
         } => {
+            let binding = match (client, conversation) {
+                (Some(client), Some(conversation)) => {
+                    let binding = McpSessionBinding {
+                        client: client.clone(),
+                        conversation: conversation.clone(),
+                    };
+                    binding.validate()?;
+                    Some(binding)
+                }
+                _ => None,
+            };
             let draft = SessionDraft {
                 work_item_key: work.clone(),
                 agent_id: agent.clone(),
@@ -302,8 +322,48 @@ pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<(
                 claim: *claim,
                 claim_ttl_ms: *ttl_ms,
             };
-            let (started, event) = Runtime::attach(&mut db.store, project)?
-                .start_session(*expected_revision, draft)?;
+            // With a binding, reuse an existing conversation session exactly
+            // like the MCP channel does, so both surfaces resolve the same
+            // session instead of splitting host bindings.
+            if let Some(binding) = &binding {
+                if let Some(session) = db.store.mcp_bound_session(project, binding)? {
+                    let work_matches = match (&session.work_item_id, work.as_deref()) {
+                        (_, None) => true,
+                        (Some(id), Some(key)) => {
+                            db.store.work_identity(project, key).ok().as_ref() == Some(id)
+                        }
+                        (None, Some(_)) => false,
+                    };
+                    if !work_matches
+                        || session.agent_id != *agent
+                        || session.provider != *provider
+                        || session.model != *model
+                        || session.branch_id != db.project.current_branch_id
+                    {
+                        return Err(Error::SourceConflict(
+                            "conversation already belongs to different work or identity".into(),
+                        ));
+                    }
+                    db.check_revision()?;
+                    let mut value = db.metadata(db.project.project_revision);
+                    value["session"] = json!(session);
+                    value["binding"] = json!(binding);
+                    value["binding_reused"] = json!(true);
+                    return print(
+                        &value,
+                        &format!(
+                            "Session: {}\nAgent: {}\nBinding: reused\nRevision: {}",
+                            session.id, agent, db.project.project_revision
+                        ),
+                        json_output,
+                    );
+                }
+            }
+            let mut runtime = Runtime::attach(&mut db.store, project)?;
+            let (started, event) = match binding {
+                Some(binding) => runtime.start_bound_session(*expected_revision, draft, binding)?,
+                None => runtime.start_session(*expected_revision, draft)?,
+            };
             let mut value = db.metadata(event.project_revision);
             value["session"] = json!(started.session);
             value["claim"] = json!(started.claim);
