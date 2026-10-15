@@ -1040,10 +1040,78 @@ pub fn redact_sensitive_value(value: Value) -> Value {
     }
 }
 
+/// Schema validation errors embed the serde/serde_json message, which quotes
+/// the offending caller value (JSON string inputs are rendered verbatim
+/// inside double quotes). Submitted values must never reach the error text,
+/// so replace every double-quoted segment with `"…"` and keep the structural
+/// remainder (expected types, backticked field names, line/column info).
+pub fn redact_schema_error_detail(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for c in message.chars() {
+        if in_quotes {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_quotes = false;
+                out.push_str("\"…\"");
+            }
+        } else if c == '"' {
+            in_quotes = true;
+        } else {
+            out.push(c);
+        }
+    }
+    if in_quotes {
+        out.push_str("\"…");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn schema_error_detail_drops_submitted_string_values() {
+        let secret = "sk-live-9f8e7d6c5b4a";
+        let detail = redact_schema_error_detail(&format!(
+            "invalid type: string \"{secret}\", expected u64 at line 1 column 12"
+        ));
+        assert_eq!(
+            detail,
+            "invalid type: string \"…\", expected u64 at line 1 column 12"
+        );
+        assert!(!detail.contains(secret));
+    }
+
+    #[test]
+    fn schema_error_detail_handles_escaped_quotes_and_keeps_backticked_names() {
+        let detail = redact_schema_error_detail(
+            "invalid type: string \"tok\\\"en-value\", expected a sequence",
+        );
+        assert_eq!(detail, "invalid type: string \"…\", expected a sequence");
+        assert!(!detail.contains("en-value"));
+        assert_eq!(
+            redact_schema_error_detail("missing field `verified_at` at line 1 column 40"),
+            "missing field `verified_at` at line 1 column 40"
+        );
+        assert_eq!(
+            redact_schema_error_detail("invalid type: string \"a\\\"b\", expected u64"),
+            "invalid type: string \"…\", expected u64"
+        );
+    }
+
+    #[test]
+    fn schema_error_detail_survives_unterminated_quotes() {
+        let detail = redact_schema_error_detail("invalid type: string \"unterminated");
+        assert_eq!(detail, "invalid type: string \"…");
+        assert!(!detail.contains("unterminated"));
+    }
 
     #[test]
     fn public_scalar_literals_have_complete_text_boundaries() {

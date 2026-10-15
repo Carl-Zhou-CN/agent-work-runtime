@@ -53,14 +53,6 @@ pub fn minimal_context(sources: &[awr_core::Source]) -> bool {
             .iter()
             .all(|s| s.config["context_profile"] == "minimal")
 }
-/// Runtime-owned paths are machine state under `.awr/` that AWR never rewrites
-/// through source mutations. Authored intake sources under `.awr/intake/` are
-/// the documented exception: takeover proposes them as authoritative source
-/// files (see docs/dev/TAKEOVER.md), so review and writeback paths treat them
-/// like any other in-project source. Both `root` and `path` must be canonical.
-pub fn is_runtime_owned_path(root: &Path, path: &Path) -> bool {
-    path.starts_with(root.join(".awr")) && !path.starts_with(root.join(".awr/intake"))
-}
 fn source_first() -> AuthorityMode {
     AuthorityMode::SourceFirst
 }
@@ -97,7 +89,8 @@ impl Manifest {
         awr_core::ensure_public_data(&value)?;
         let manifest: Self = value.try_into().map_err(|error| {
             Error::InvalidInput(format!(
-                "source manifest does not match its schema: {error}"
+                "source manifest does not match its schema: {}",
+                awr_core::redact_schema_error_detail(&error.to_string())
             ))
         })?;
         manifest.validate()?;

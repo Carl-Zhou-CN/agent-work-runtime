@@ -167,7 +167,10 @@ pub fn evidence(root: &Path, command: &EvidenceCommand, json_output: bool) -> Re
                 ));
             }
             let mut draft: EvidenceDraft = serde_json::from_value(input).map_err(|error| {
-                Error::InvalidInput(format!("evidence input does not match its schema: {error}"))
+                Error::InvalidInput(format!(
+                    "evidence input does not match its schema: {}",
+                    awr_core::redact_schema_error_detail(&error.to_string())
+                ))
             })?;
             if !declared_branch {
                 draft.branch_id = db.project.current_branch_id;

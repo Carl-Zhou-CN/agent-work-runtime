@@ -864,3 +864,19 @@ fn completion_report_criterion_mismatch_names_the_check_and_the_exact_text() {
     );
     assert!(message.contains(C2), "{message}");
 }
+
+#[test]
+fn completion_schema_error_does_not_echo_submitted_values() {
+    let f = Fixture::new();
+    // Passes the public-content filter (no credential keywords) but is still a
+    // private submitted value; the serde echo must not surface it verbatim.
+    let value = "private-hostname-9f8e7d6c5b4a.internal";
+    let mut input = f.input();
+    input["version"] = json!(value);
+    let result = f.complete(&input);
+    Fixture::error(&result, "InvalidInput");
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(message.contains("does not match its schema"), "{message}");
+    assert!(!message.contains(value), "{message}");
+    assert!(message.contains('…'), "{message}");
+}

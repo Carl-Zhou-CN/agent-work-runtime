@@ -167,7 +167,7 @@ impl CompletionReport {
         }
         if self.verified_at < 0 {
             return Err(Error::EvidenceMissing(
-                "verification report verified_at must be Unix epoch seconds (a non-negative i64), not a timestamp string or negative value".into(),
+                "verification report verified_at must be non-negative Unix epoch seconds (an i64), not a negative value".into(),
             ));
         }
         if self.verified_at > at {
