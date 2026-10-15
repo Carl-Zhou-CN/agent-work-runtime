@@ -273,3 +273,40 @@ fn rebuild_restores_source_facts_without_inventing_runtime_history() {
         Err(Error::SourceConflict(_))
     ));
 }
+
+#[test]
+fn unchanged_sources_are_not_reprojected_after_a_stale_marker() {
+    let fixture = Fixture::new();
+    let mut store = fixture.store();
+    let manifest = manifest();
+    let first = index_project(&mut store, &fixture.0, &manifest, false).unwrap();
+    assert!(first.ok);
+    assert_eq!(first.indexed, 5);
+    let baseline_revision = first.project_revision;
+
+    // Simulate an interrupted reindex: sources are marked stale without any
+    // byte change on disk.
+    for domain in ["ledger", "goal", "rules", "decisions"] {
+        let source = source(&store, first.project_id, domain);
+        store
+            .mark_source_freshness(
+                &store.source(first.project_id, source.id).unwrap(),
+                Freshness::Stale,
+            )
+            .unwrap();
+    }
+    let marked = store.project(first.project_id).unwrap().project_revision;
+    assert!(marked > baseline_revision);
+
+    let recovered = index_project(&mut store, &fixture.0, &manifest, false).unwrap();
+    assert!(recovered.ok);
+    assert_eq!((recovered.indexed, recovered.unchanged), (0, 5));
+    // Nothing moved on disk, so recovery must not advance the revision.
+    assert_eq!(recovered.project_revision, marked);
+
+    // An explicit reindex still reprojections on request.
+    let forced = index_project(&mut store, &fixture.0, &manifest, true).unwrap();
+    assert!(forced.ok);
+    assert_eq!(forced.indexed, 5);
+    assert!(forced.project_revision > marked);
+}

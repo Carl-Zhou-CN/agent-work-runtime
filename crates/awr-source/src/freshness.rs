@@ -22,7 +22,14 @@ pub fn observe_source(
     match locator.read(root, cap) {
         Ok(snapshot) => {
             let changed = source.fingerprint != snapshot.fingerprint;
-            let source = if changed || source.freshness != Freshness::Fresh {
+            // Only an actual byte change demotes the source. Re-marking an
+            // unchanged source stale would emit a freshness event and advance
+            // the project revision even though no content moved, which forces
+            // concurrent writers to refresh their expected revision for
+            // nothing. A non-fresh source that rereads identical bytes keeps
+            // its state here and is handled by the unchanged fast path (or a
+            // single reprojection) in the indexer.
+            let source = if changed {
                 store.mark_source_freshness(source, Freshness::Stale)?
             } else {
                 let current = store.source(source.project_id, source.id)?;

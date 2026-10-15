@@ -403,7 +403,9 @@ fn index_one(
             adapter: &spec.adapter,
         },
     )?;
+    let pre_config = source.config.clone();
     let source = store.configure_source(&source, source_configuration(spec, minimal_context))?;
+    let config_changed = pre_config != source.config;
     let cap = crate::source_read_cap(&spec.adapter)?;
     let observed = if let Some(snapshot) = captured {
         if snapshot.bytes.len() as u64 > cap {
@@ -426,11 +428,20 @@ fn index_one(
     }
     let snapshot = observed
         .snapshot
+        .clone()
         .ok_or_else(|| Error::SourceUnavailable("source returned no snapshot".into()))?;
     let mut source = observed.source;
+    // Unchanged bytes plus a matching content review mean the indexed state is
+    // already current regardless of a stale marker from a failed prior scan or
+    // interrupted reindex: reprojection (and a project revision advance) must
+    // not be forced when nothing moved. A configuration change, a recovered
+    // unavailable locator, or a read failure (changed=false, snapshot=None)
+    // still takes the projection path below.
     if mode != Some(true)
         && !observed.changed
-        && source.freshness == Freshness::Fresh
+        && observed.snapshot.is_some()
+        && !config_changed
+        && source.freshness != Freshness::Unavailable
         && store.source_review_matches(&source, snapshot.content_review.as_ref())?
     {
         let warnings = store.source_warnings(&source)?;
