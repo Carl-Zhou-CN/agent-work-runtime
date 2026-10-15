@@ -121,38 +121,116 @@ impl CompletionReport {
         at: i64,
     ) -> Result<()> {
         let known = criteria.iter().map(String::as_str).collect::<BTreeSet<_>>();
-        if self.version != 1
-            || self.work_item != work_key
-            || !is_source_sha(&self.source_sha)
-            || !evidence
-                .source_sha
-                .as_ref()
-                .is_some_and(|sha| sha.eq_ignore_ascii_case(&self.source_sha))
-            || evidence.command.as_deref() != Some(&self.command)
-            || self.command.trim().is_empty()
-            || self.scope.iter().collect::<BTreeSet<_>>() != evidence.scope.iter().collect()
-            || self.verified_at < 0
-            || self.verified_at > at
-            || evidence.verified_at != Some(self.verified_at)
-        {
-            return Err(Error::EvidenceMissing("verification report disagrees with its work, source SHA, command, scope or verification-time binding".into()));
+        if self.version != 1 {
+            return Err(Error::EvidenceMissing(format!(
+                "verification report version must be 1, got {}",
+                self.version
+            )));
         }
-        if self.checks.is_empty()
-            || self.checks.iter().any(|c| {
-                !c.passed
-                    || c.name.trim().is_empty()
-                    || c.details.trim().is_empty()
-                    || c.criteria.iter().any(|s| !known.contains(s.as_str()))
-            })
-            || self
-                .checks
-                .iter()
-                .map(|c| &c.name)
-                .collect::<BTreeSet<_>>()
-                .len()
-                != self.checks.len()
+        if self.work_item != work_key {
+            return Err(Error::EvidenceMissing(format!(
+                "verification report work_item {:?} does not match this work item {:?}",
+                self.work_item, work_key
+            )));
+        }
+        if !is_source_sha(&self.source_sha) {
+            return Err(Error::EvidenceMissing(
+                "verification report source_sha must be a full source commit SHA".into(),
+            ));
+        }
+        if !evidence
+            .source_sha
+            .as_ref()
+            .is_some_and(|sha| sha.eq_ignore_ascii_case(&self.source_sha))
         {
-            return Err(Error::EvidenceMissing("verification report requires uniquely named passing checks with details and current acceptance references".into()));
+            return Err(Error::EvidenceMissing(format!(
+                "verification report source_sha {} does not match the SHA bound to the evidence ({})",
+                self.source_sha,
+                evidence
+                    .source_sha
+                    .as_deref()
+                    .unwrap_or("(none registered)")
+            )));
+        }
+        if evidence.command.as_deref() != Some(&self.command) || self.command.trim().is_empty() {
+            return Err(Error::EvidenceMissing(format!(
+                "verification report command {:?} does not match the command registered with the evidence ({:?})",
+                self.command,
+                evidence.command.as_deref().unwrap_or("(none registered)")
+            )));
+        }
+        if self.scope.iter().collect::<BTreeSet<_>>() != evidence.scope.iter().collect() {
+            return Err(Error::EvidenceMissing(format!(
+                "verification report scope {:?} does not match the scope registered with the evidence ({:?})",
+                self.scope, evidence.scope
+            )));
+        }
+        if self.verified_at < 0 {
+            return Err(Error::EvidenceMissing(
+                "verification report verified_at must be Unix epoch seconds (a non-negative i64), not a timestamp string or negative value".into(),
+            ));
+        }
+        if self.verified_at > at {
+            return Err(Error::EvidenceMissing(format!(
+                "verification report verified_at {} is later than the current time; use Unix epoch seconds",
+                self.verified_at
+            )));
+        }
+        if evidence.verified_at != Some(self.verified_at) {
+            return Err(Error::EvidenceMissing(format!(
+                "verification report verified_at {} does not equal the verified_at registered with the evidence ({})",
+                self.verified_at,
+                evidence
+                    .verified_at
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "(none)".into())
+            )));
+        }
+        if self.checks.is_empty() {
+            return Err(Error::EvidenceMissing(
+                "verification report requires at least one check".into(),
+            ));
+        }
+        for check in &self.checks {
+            if !check.passed {
+                return Err(Error::EvidenceMissing(format!(
+                    "verification report check {:?} records passed=false; completion requires passing checks",
+                    check.name
+                )));
+            }
+            if check.name.trim().is_empty() {
+                return Err(Error::EvidenceMissing(
+                    "verification report checks require nonempty unique names".into(),
+                ));
+            }
+            if check.details.trim().is_empty() {
+                return Err(Error::EvidenceMissing(format!(
+                    "verification report check {:?} requires nonempty details",
+                    check.name
+                )));
+            }
+            for criterion in &check.criteria {
+                if !known.contains(criterion.as_str()) {
+                    return Err(Error::EvidenceMissing(format!(
+                        "verification report check {:?} references criterion {:?} which is not an authoritative acceptance criterion; criteria must match the ledger acceptance text byte-for-byte, one of: {}",
+                        check.name,
+                        criterion,
+                        itertools_join(criteria)
+                    )));
+                }
+            }
+        }
+        if self
+            .checks
+            .iter()
+            .map(|c| &c.name)
+            .collect::<BTreeSet<_>>()
+            .len()
+            != self.checks.len()
+        {
+            return Err(Error::EvidenceMissing(
+                "verification report check names must be unique".into(),
+            ));
         }
         Ok(())
     }
@@ -161,6 +239,14 @@ impl CompletionReport {
             .iter()
             .any(|c| c.passed && c.criteria.iter().any(|s| s == criterion))
     }
+}
+
+fn itertools_join(criteria: &[String]) -> String {
+    criteria
+        .iter()
+        .map(|criterion| format!("{criterion:?}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

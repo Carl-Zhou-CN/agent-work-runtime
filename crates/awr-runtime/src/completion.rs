@@ -107,7 +107,7 @@ pub(crate) fn verify_completion_proof(
         )?;
         let report: CompletionReport = serde_json::from_slice(&bytes).map_err(|e| {
             Error::EvidenceMissing(format!(
-                "evidence {} has no valid completion report: {e}",
+                "evidence {} has no valid completion report: {e}; the report must be a JSON object with version, work_item, source_sha, command, scope, verified_at (Unix epoch seconds i64) and checks[] each with name, passed, details, criteria",
                 evidence.id
             ))
         })?;

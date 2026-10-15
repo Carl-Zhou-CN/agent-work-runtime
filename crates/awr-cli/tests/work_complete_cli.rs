@@ -818,3 +818,49 @@ fn completion_recovery_retains_newer_source_without_confirming_completion() {
         0
     );
 }
+
+#[test]
+fn completion_report_byte_mismatch_names_the_sha256_and_newline_cause() {
+    let f = Fixture::new();
+    f.organize();
+    let selected = f.evidence("E", &f.report(), |_| {});
+    // One trailing newline changes the bytes without changing the parsed JSON.
+    let path = f.root.join(&selected.locator);
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.push(b'\n');
+    fs::write(&path, &bytes).unwrap();
+    let result = f.complete(&f.input());
+    Fixture::error(&result, "SourceConflict");
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        message.contains("SHA256 bound at registration"),
+        "{message}"
+    );
+    assert!(message.contains("trailing newlines"), "{message}");
+    assert!(
+        message.contains(selected.sha256.as_deref().unwrap()),
+        "{message}"
+    );
+}
+
+#[test]
+fn completion_report_criterion_mismatch_names_the_check_and_the_exact_text() {
+    let f = Fixture::new();
+    f.organize();
+    let mut report = f.report();
+    report["checks"][0]["criteria"] = json!([C1, "The report is reviewed and accepted"]);
+    let selected = f.evidence("E", &report, |_| {});
+    assert!(selected.sha256.is_some());
+    let result = f.complete(&f.input());
+    Fixture::error(&result, "EvidenceMissing");
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        message.contains("not an authoritative acceptance criterion"),
+        "{message}"
+    );
+    assert!(
+        message.contains("The report is reviewed and accepted"),
+        "{message}"
+    );
+    assert!(message.contains(C2), "{message}");
+}

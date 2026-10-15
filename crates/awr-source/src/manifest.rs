@@ -95,9 +95,11 @@ impl Manifest {
         let value: toml::Value = toml::from_str(text)
             .map_err(|_| Error::InvalidInput("invalid source manifest TOML".into()))?;
         awr_core::ensure_public_data(&value)?;
-        let manifest: Self = value
-            .try_into()
-            .map_err(|_| Error::InvalidInput("source manifest does not match its schema".into()))?;
+        let manifest: Self = value.try_into().map_err(|error| {
+            Error::InvalidInput(format!(
+                "source manifest does not match its schema: {error}"
+            ))
+        })?;
         manifest.validate()?;
         Ok(manifest)
     }
