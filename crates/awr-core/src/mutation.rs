@@ -220,6 +220,10 @@ impl ProposalAction {
             (Self::Submit, Draft) => Ok(Ready),
             (Self::Approve, Ready) => Ok(Approved),
             (Self::Reject, _) if open => Ok(Rejected),
+            // A Conflict proposal has no other exit: apply already refused it, and leaving
+            // it open forever only accumulates as a permanent doctor finding. Explicit
+            // rejection with an actor and reason is the auditable way to close it out.
+            (Self::Reject, Conflict) => Ok(Rejected),
             (Self::Conflict, _) if open => Ok(Conflict),
             (Self::Fail, _) if open => Ok(Failed),
             (Self::RequireManualApply, Approved) => Ok(Approved),
