@@ -45,6 +45,9 @@ const REPORT_LIMIT: usize = 65536;
 #[serde(rename_all = "snake_case")]
 pub enum LocalGitError {
     InvalidConfiguration,
+    /// Startup probed an interpreter older than the documented minimum, so the
+    /// `show-ref --exists` semantics the adapter relies on are unavailable.
+    UnsupportedGitVersion,
     BindingMismatch,
     RepositoryUnavailable,
     TimedOut,

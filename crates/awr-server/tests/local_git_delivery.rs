@@ -674,9 +674,12 @@ async fn unsupported_ref_existence_probe_is_refused() {
     use std::os::unix::fs::PermissionsExt;
     let f = GitFixture::new(false);
     let executable = f.root.join("unsupported-git");
+    // An interpreter without `show-ref --exists` (any Git older than the
+    // documented minimum) must be named as such instead of surfacing as an
+    // opaque InvalidConfiguration.
     std::fs::write(
         &executable,
-        "#!/bin/sh\ncase \"$*\" in\n*--is-bare-repository*) printf 'true\\n';;\n*) exit 129;;\nesac\n",
+        "#!/bin/sh\ncase \"$*\" in\n*--version*) printf 'git version 2.39.5 (Apple Git-128)\\n';;\n*) exit 129;;\nesac\n",
     )
     .unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -684,7 +687,7 @@ async fn unsupported_ref_existence_probe_is_refused() {
     config.git_executable = executable;
     assert!(matches!(
         LocalGitAdapter::open(config).await,
-        Err(LocalGitError::InvalidConfiguration)
+        Err(LocalGitError::UnsupportedGitVersion)
     ));
 }
 

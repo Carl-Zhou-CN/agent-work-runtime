@@ -124,6 +124,30 @@ fn blob_path(locator: &str) -> Option<&str> {
     .then_some(path)
 }
 
+/// Minimum Git minor release providing `show-ref --exists`, kept in sync with
+/// the documented requirement in docs/dev/integrations/local-git-delivery.md.
+const MIN_GIT_MINOR: u32 = 46;
+
+/// Parse `git version X.Y[.Z...]` output and report whether the interpreter
+/// supports `show-ref --exists`. Distribution suffixes ("2.39.5 (Apple Git-128)",
+/// "2.45.2.windows.1") do not affect the leading numbers.
+fn supports_show_ref_exists(version: &str) -> bool {
+    let rest = match version.trim().strip_prefix("git version ") {
+        Some(rest) => rest,
+        None => return false,
+    };
+    let mut numbers = rest.split('.');
+    let major: u32 = match numbers.next().and_then(|p| p.parse().ok()) {
+        Some(major) => major,
+        None => return false,
+    };
+    let minor: u32 = match numbers.next().and_then(|p| p.parse().ok()) {
+        Some(minor) => minor,
+        None => return false,
+    };
+    major > 2 || (major == 2 && minor >= MIN_GIT_MINOR)
+}
+
 impl LocalGitAdapter {
     pub async fn open(mut config: LocalGitConfig) -> Result<Self, LocalGitError> {
         if config.version != 1
@@ -174,6 +198,19 @@ impl LocalGitAdapter {
         };
         let format =
             tokio::time::timeout(Duration::from_millis(config.inspection_timeout_ms), async {
+                // The `show-ref --exists` probe below needs the documented
+                // minimum Git release; older interpreters exit 129 with a
+                // usage error that otherwise surfaces as an opaque
+                // InvalidConfiguration. Probe the version up front so the
+                // diagnostic names the real cause.
+                if !git
+                    .text(&["--version"])
+                    .await?
+                    .as_deref()
+                    .is_some_and(supports_show_ref_exists)
+                {
+                    return Err(LocalGitError::UnsupportedGitVersion);
+                }
                 if git
                     .text(&["rev-parse", "--is-bare-repository"])
                     .await?
@@ -769,5 +806,30 @@ pub(super) fn content_record(
             witness,
             provenance: observation.provenance.clone(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod version_probe_tests {
+    use super::{MIN_GIT_MINOR, supports_show_ref_exists};
+
+    #[test]
+    fn version_probe_accepts_the_documented_minimum_and_newer() {
+        assert!(supports_show_ref_exists(&format!(
+            "git version 2.{MIN_GIT_MINOR}.0"
+        )));
+        assert!(supports_show_ref_exists("git version 2.47.1"));
+        assert!(supports_show_ref_exists("git version 3.0.0"));
+    }
+
+    #[test]
+    fn version_probe_rejects_older_interpreters_and_unparseable_output() {
+        assert!(!supports_show_ref_exists(
+            "git version 2.39.5 (Apple Git-128)"
+        ));
+        assert!(!supports_show_ref_exists("git version 1.9.9"));
+        assert!(!supports_show_ref_exists("git version 2.45.2.windows.1"));
+        assert!(!supports_show_ref_exists("not git output"));
+        assert!(!supports_show_ref_exists(""));
     }
 }
