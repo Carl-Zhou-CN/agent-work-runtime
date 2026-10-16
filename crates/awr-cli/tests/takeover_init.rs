@@ -164,6 +164,80 @@ fn inventory_does_not_follow_symlinks() {
     assert!(preview["draft"]["inventory"].as_array().unwrap().is_empty());
 }
 
+#[test]
+fn deep_directories_are_skipped_with_an_observation_instead_of_failing() {
+    let p = Project::new();
+    p.write("README.md", "# Document portal\n");
+    // A framework build output (`_next`, like chatui bundles) and an ordinary
+    // tree, both reaching depth 13 where the intake walk used to abort.
+    let tail = "a/b/c/d/e/f/g/h/i/j/k/l";
+    p.write(
+        &format!("web/_next/static/{tail}/bundle.js"),
+        "console.log(1);\n",
+    );
+    p.write(&format!("deep/{tail}/notes.md"), "# Deep notes\n");
+    let preview = p.ok(&["init"]);
+    assert_eq!(preview["status"], "preview");
+    let paths: Vec<&str> = preview["draft"]["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["README.md"]);
+    assert!(
+        preview["draft"]["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|o| {
+                o.as_str()
+                    .unwrap()
+                    .contains("1 directory subtree deeper than 12 levels was skipped")
+            })
+    );
+    p.ok(&[
+        "init",
+        "--accept",
+        "--goal",
+        "Deliver a useful document portal",
+    ]);
+    assert!(
+        p.ok(&["work", "show", "INTAKE-001"])
+            .to_string()
+            .contains("Verify project goals")
+    );
+}
+
+#[test]
+fn authored_documents_under_ambiguous_directory_names_are_still_indexed() {
+    let p = Project::new();
+    p.write("README.md", "# Document portal\n");
+    // Ambiguous names (vendor/coverage/Pods) match authored content at any
+    // depth, so SKIP must not swallow documents under them; only unambiguous
+    // build output names are skipped.
+    p.write("docs/vendor/notes.md", "# Vendored notes\n");
+    p.write("policy/coverage/report.md", "# Coverage policy\n");
+    p.write("guides/Pods/setup.md", "# Pods guide\n");
+    let preview = p.ok(&["init"]);
+    assert_eq!(preview["status"], "preview");
+    let paths: Vec<&str> = preview["draft"]["inventory"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "README.md",
+            "docs/vendor/notes.md",
+            "guides/Pods/setup.md",
+            "policy/coverage/report.md",
+        ]
+    );
+}
+
 const MEASUREMENT: &str = "## Payload measurement\n\nThe measurement serializes tool objects as compact, sorted JSON.\n\nEnvironment:\n\n- Server commit: `0123456789abcdef0123456789abcdef01234567`\n- Python: `3.12.11`\n- Node: `22.14.0`\n- Operating system: Ubuntu 24.04\n- catalog: 8 domains and 55 children\n- measurement unit: UTF-8 serialized bytes, not model tokens\n";
 
 #[test]
