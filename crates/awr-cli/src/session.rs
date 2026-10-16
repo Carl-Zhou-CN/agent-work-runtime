@@ -346,9 +346,29 @@ pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<(
                         ));
                     }
                     db.check_revision()?;
+                    // A reused binding must not report a usable session that
+                    // is already closed; the repair is to resume it.
+                    if session.status != "active" {
+                        return Err(Error::InvalidTransition(format!(
+                            "conversation binding resolves session {} that is {}; resume the session or start a new conversation",
+                            session.id, session.status
+                        )));
+                    }
+                    // The same command with a new binding rejects a stale
+                    // --expected-revision inside the transaction; reuse must
+                    // enforce it too instead of silently accepting it.
+                    if *expected_revision != db.project.project_revision {
+                        return Err(Error::RevisionConflict {
+                            expected: *expected_revision,
+                            actual: db.project.project_revision,
+                        });
+                    }
                     // A caller scripting `session start --claim` must not
                     // silently lose the claim on the reuse path: acquire it
                     // on the resolved session, exactly like `work claim`.
+                    // The store rejects a closed session or a conflicting
+                    // active claim, so reuse never reports success for an
+                    // unmet requested condition or steals a claim.
                     let (claim, revision) = if *claim {
                         let (claim, event) = Runtime::attach(&mut db.store, project)?
                             .acquire_claim(*expected_revision, session.id, *ttl_ms)?;
@@ -361,6 +381,15 @@ pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<(
                     value["binding"] = json!(binding);
                     value["binding_reused"] = json!(true);
                     value["claim"] = json!(claim);
+                    // The caller sees the session's actual claim state even
+                    // when it did not request one.
+                    value["active_claims"] = json!(
+                        db.store
+                            .session_claims(project, session.id)?
+                            .iter()
+                            .filter(|c| c.status == "active")
+                            .collect::<Vec<_>>()
+                    );
                     let claim_note = claim
                         .as_ref()
                         .map(|c| c.id.to_string())
