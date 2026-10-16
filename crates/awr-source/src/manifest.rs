@@ -118,15 +118,15 @@ impl Manifest {
             if !["goal", "plan", "rules", "ledger", "decisions"].contains(&source.domain.as_str())
                 || !["primary", "supporting"].contains(&source.role.as_str())
             {
-                return Err(Error::InvalidInput(format!(
-                    "invalid source domain/role: {}/{}",
-                    source.domain, source.role
-                )));
+                return Err(Error::InvalidInput(
+                    "source domain/role must be one of the supported domain and role combinations"
+                        .into(),
+                ));
             }
             if !SOURCE_ADAPTERS.contains(&source.adapter.as_str()) {
                 return Err(Error::Unsupported(format!(
-                    "source adapter {}",
-                    source.adapter
+                    "source adapter must be one of: {}",
+                    SOURCE_ADAPTERS.join(", ")
                 )));
             }
             if source.path.is_some() == source.locator.is_some() {
@@ -193,5 +193,38 @@ impl Manifest {
         roots.sort();
         roots.dedup();
         Ok(roots)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn manifest_text(context_profile: &str, adapter: &str) -> String {
+        format!(
+            "[project]\nname = 'P'\ncontext_profile = '{context_profile}'\n\n[[sources]]\ndomain = 'decisions'\nrole = 'supporting'\npath = 'decisions'\nadapter = '{adapter}'\n"
+        )
+    }
+
+    #[test]
+    fn manifest_schema_error_redacts_unknown_enum_variant() {
+        let secret = "private-variant-9f8e7d6c5b4a";
+        let error = Manifest::parse(&manifest_text(secret, "markdown-directory-v1")).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("does not match its schema"), "{message}");
+        assert!(message.contains("unknown variant `…`"), "{message}");
+        assert!(!message.contains(secret), "{message}");
+    }
+
+    #[test]
+    fn manifest_semantic_error_does_not_echo_submitted_adapter() {
+        let secret = "private-variant-9f8e7d6c5b4a";
+        let error = Manifest::parse(&manifest_text("minimal", secret)).unwrap_err();
+        let message = error.to_string();
+        assert!(
+            message.contains("source adapter must be one of"),
+            "{message}"
+        );
+        assert!(!message.contains(secret), "{message}");
     }
 }

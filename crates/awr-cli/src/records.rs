@@ -163,7 +163,7 @@ pub fn evidence(root: &Path, command: &EvidenceCommand, json_output: bool) -> Re
                 .is_some_and(|value| value.is_string())
             {
                 return Err(Error::InvalidInput(
-                    "verified_at must be Unix epoch seconds (a JSON integer), not a timestamp string".into(),
+                    "verified_at must be Unix epoch milliseconds (a JSON integer, now_millis()), not a timestamp string".into(),
                 ));
             }
             let mut draft: EvidenceDraft = serde_json::from_value(input).map_err(|error| {

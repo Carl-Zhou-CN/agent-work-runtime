@@ -120,22 +120,23 @@ impl CompletionReport {
         criteria: &[String],
         at: i64,
     ) -> Result<()> {
+        // Diagnostics stay value-free: submitted report content must never be
+        // echoed back, so failures identify the JSON pointer of the offending
+        // field plus a static rule and repair hint (see also #321).
         let known = criteria.iter().map(String::as_str).collect::<BTreeSet<_>>();
         if self.version != 1 {
-            return Err(Error::EvidenceMissing(format!(
-                "verification report version must be 1, got {}",
-                self.version
-            )));
+            return Err(Error::EvidenceMissing(
+                "/version must be 1 in the verification report".into(),
+            ));
         }
         if self.work_item != work_key {
-            return Err(Error::EvidenceMissing(format!(
-                "verification report work_item {:?} does not match this work item {:?}",
-                self.work_item, work_key
-            )));
+            return Err(Error::EvidenceMissing(
+                "/work_item must equal the key of the work item being completed".into(),
+            ));
         }
         if !is_source_sha(&self.source_sha) {
             return Err(Error::EvidenceMissing(
-                "verification report source_sha must be a full source commit SHA".into(),
+                "verification report /source_sha must be a full source commit SHA".into(),
             ));
         }
         if !evidence
@@ -143,79 +144,62 @@ impl CompletionReport {
             .as_ref()
             .is_some_and(|sha| sha.eq_ignore_ascii_case(&self.source_sha))
         {
-            return Err(Error::EvidenceMissing(format!(
-                "verification report source_sha {} does not match the SHA bound to the evidence ({})",
-                self.source_sha,
-                evidence
-                    .source_sha
-                    .as_deref()
-                    .unwrap_or("(none registered)")
-            )));
+            return Err(Error::EvidenceMissing(
+                "verification report /source_sha must equal the SHA bound to the evidence".into(),
+            ));
         }
         if evidence.command.as_deref() != Some(&self.command) || self.command.trim().is_empty() {
-            return Err(Error::EvidenceMissing(format!(
-                "verification report command {:?} does not match the command registered with the evidence ({:?})",
-                self.command,
-                evidence.command.as_deref().unwrap_or("(none registered)")
-            )));
+            return Err(Error::EvidenceMissing(
+                "verification report /command must equal the command registered with the evidence and be nonempty".into(),
+            ));
         }
         if self.scope.iter().collect::<BTreeSet<_>>() != evidence.scope.iter().collect() {
-            return Err(Error::EvidenceMissing(format!(
-                "verification report scope {:?} does not match the scope registered with the evidence ({:?})",
-                self.scope, evidence.scope
-            )));
+            return Err(Error::EvidenceMissing(
+                "verification report /scope must match the scope registered with the evidence"
+                    .into(),
+            ));
         }
         if self.verified_at < 0 {
             return Err(Error::EvidenceMissing(
-                "verification report verified_at must be non-negative Unix epoch seconds (an i64), not a negative value".into(),
+                "verification report /verified_at must be a non-negative Unix epoch milliseconds integer (now_millis())".into(),
             ));
         }
         if self.verified_at > at {
-            return Err(Error::EvidenceMissing(format!(
-                "verification report verified_at {} is later than the current time; use Unix epoch seconds",
-                self.verified_at
-            )));
+            return Err(Error::EvidenceMissing(
+                "verification report /verified_at is later than the current time; use Unix epoch milliseconds (now_millis())".into(),
+            ));
         }
         if evidence.verified_at != Some(self.verified_at) {
-            return Err(Error::EvidenceMissing(format!(
-                "verification report verified_at {} does not equal the verified_at registered with the evidence ({})",
-                self.verified_at,
-                evidence
-                    .verified_at
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "(none)".into())
-            )));
+            return Err(Error::EvidenceMissing(
+                "verification report /verified_at must equal the verified_at registered with the evidence".into(),
+            ));
         }
         if self.checks.is_empty() {
             return Err(Error::EvidenceMissing(
                 "verification report requires at least one check".into(),
             ));
         }
-        for check in &self.checks {
+        for (check_index, check) in self.checks.iter().enumerate() {
+            let check_path = format!("/checks/{check_index}");
             if !check.passed {
                 return Err(Error::EvidenceMissing(format!(
-                    "verification report check {:?} records passed=false; completion requires passing checks",
-                    check.name
+                    "{check_path}/passed records passed=false; completion requires passing checks"
                 )));
             }
             if check.name.trim().is_empty() {
-                return Err(Error::EvidenceMissing(
-                    "verification report checks require nonempty unique names".into(),
-                ));
+                return Err(Error::EvidenceMissing(format!(
+                    "{check_path}/name requires nonempty unique names"
+                )));
             }
             if check.details.trim().is_empty() {
                 return Err(Error::EvidenceMissing(format!(
-                    "verification report check {:?} requires nonempty details",
-                    check.name
+                    "{check_path}/details requires nonempty details"
                 )));
             }
-            for criterion in &check.criteria {
-                if !known.contains(criterion.as_str()) {
+            for (criterion_index, _) in check.criteria.iter().enumerate() {
+                if !known.contains(check.criteria[criterion_index].as_str()) {
                     return Err(Error::EvidenceMissing(format!(
-                        "verification report check {:?} references criterion {:?} which is not an authoritative acceptance criterion; criteria must match the ledger acceptance text byte-for-byte, one of: {}",
-                        check.name,
-                        criterion,
-                        itertools_join(criteria)
+                        "{check_path}/criteria/{criterion_index} must match an authoritative acceptance criterion from the ledger byte-for-byte"
                     )));
                 }
             }
@@ -239,14 +223,6 @@ impl CompletionReport {
             .iter()
             .any(|c| c.passed && c.criteria.iter().any(|s| s == criterion))
     }
-}
-
-fn itertools_join(criteria: &[String]) -> String {
-    criteria
-        .iter()
-        .map(|criterion| format!("{criterion:?}"))
-        .collect::<Vec<_>>()
-        .join(", ")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
