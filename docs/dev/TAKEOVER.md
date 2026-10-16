@@ -78,6 +78,8 @@ work_items:
     next_action: Implement the search handler using the current document index
 ```
 
+Quote ledger values that contain `#`. YAML truncates a plain scalar at ` #` and treats the rest as a comment, so `next_action: Follow PR #322` indexes as `Follow PR` and the tail is unreachable by field edits — which deliberately preserve same-line comments, so the truncated tail survives later rewrites. Write `next_action: "Follow PR #322 review"` (or a block scalar) instead.
+
 For existing Markdown ledgers, add `goal`/`目标`/`关联目标`, `acceptance`/`验收标准`, and `next_action`/`下一步` columns in the original table. A checklist without this information remains a useful source observation and produces organization actions. AWR does not rewrite the Markdown or replace it with a second ledger.
 
 CLI inspection refreshes only the rebuildable projection cache; it does not change goals, task files, claims or execution state. MCP remains read-only: after source edits run `awr source reindex`, then call `awr_project_status` again. A stale MCP snapshot returns a structured error plus repair guidance, never a cached success. Keep both error/exit status and `organization` when integrating an Agent.

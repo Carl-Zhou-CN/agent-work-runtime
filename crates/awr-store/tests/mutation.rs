@@ -1001,3 +1001,75 @@ fn review_receipts_retain_creator_branch_without_impersonating_creator_session()
         assert_eq!(page.events.len(), 1);
     }
 }
+
+#[test]
+fn a_conflict_proposal_can_be_explicitly_rejected() {
+    let mut fixture = Fixture::new();
+    seed(&mut fixture);
+    let work = target(&fixture, EntityKind::WorkItem, "W-1");
+    let expected = revision(&fixture);
+    let (created, _) = fixture
+        .store
+        .create_proposal(
+            fixture.project.id,
+            expected,
+            draft_for_kind(
+                &work,
+                EntityKind::WorkItem,
+                json!({"next_action":"Blocked elsewhere"}),
+                None,
+            ),
+        )
+        .unwrap();
+    let (ready, _) = fixture
+        .store
+        .review_proposal(
+            fixture.project.id,
+            revision(&fixture),
+            created.id,
+            ProposalAction::Submit,
+            "author",
+            "Ready for review",
+        )
+        .unwrap();
+    assert_eq!(ready.status, ProposalStatus::Ready);
+    // An observed source conflict moves the proposal to Conflict.
+    let (conflicted, conflict_event) = fixture
+        .store
+        .review_proposal(
+            fixture.project.id,
+            revision(&fixture),
+            created.id,
+            ProposalAction::Conflict,
+            "reviewer",
+            "Source bytes moved on",
+        )
+        .unwrap();
+    assert_eq!(conflicted.status, ProposalStatus::Conflict);
+    assert_eq!(conflict_event.event_type, "proposal.conflict");
+    // Rejection is the auditable exit; the proposal cannot be reopened afterwards.
+    let (rejected, reject_event) = fixture
+        .store
+        .review_proposal(
+            fixture.project.id,
+            revision(&fixture),
+            created.id,
+            ProposalAction::Reject,
+            "reviewer",
+            "Superseded by a fresh proposal from current facts",
+        )
+        .unwrap();
+    assert_eq!(rejected.status, ProposalStatus::Rejected);
+    assert_eq!(reject_event.event_type, "proposal.rejected");
+    assert!(matches!(
+        fixture.store.review_proposal(
+            fixture.project.id,
+            revision(&fixture),
+            created.id,
+            ProposalAction::Reject,
+            "reviewer",
+            "Already terminal"
+        ),
+        Err(Error::InvalidTransition(_))
+    ));
+}
