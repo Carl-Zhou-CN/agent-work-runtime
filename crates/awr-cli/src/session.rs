@@ -329,9 +329,10 @@ pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<(
                 if let Some(session) = db.store.mcp_bound_session(project, binding)? {
                     let work_matches = match (&session.work_item_id, work.as_deref()) {
                         (_, None) => true,
-                        (Some(id), Some(key)) => {
-                            db.store.work_identity(project, key).ok().as_ref() == Some(id)
-                        }
+                        // Propagate lookup failures instead of misreporting a
+                        // store error as an identity conflict; a missing work
+                        // key is a NotFound, which is accurate on its own.
+                        (Some(id), Some(key)) => db.store.work_identity(project, key)? == *id,
                         (None, Some(_)) => false,
                     };
                     if !work_matches
@@ -345,15 +346,30 @@ pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<(
                         ));
                     }
                     db.check_revision()?;
-                    let mut value = db.metadata(db.project.project_revision);
+                    // A caller scripting `session start --claim` must not
+                    // silently lose the claim on the reuse path: acquire it
+                    // on the resolved session, exactly like `work claim`.
+                    let (claim, revision) = if *claim {
+                        let (claim, event) = Runtime::attach(&mut db.store, project)?
+                            .acquire_claim(*expected_revision, session.id, *ttl_ms)?;
+                        (Some(claim), event.project_revision)
+                    } else {
+                        (None, db.project.project_revision)
+                    };
+                    let mut value = db.metadata(revision);
                     value["session"] = json!(session);
                     value["binding"] = json!(binding);
                     value["binding_reused"] = json!(true);
+                    value["claim"] = json!(claim);
+                    let claim_note = claim
+                        .as_ref()
+                        .map(|c| c.id.to_string())
+                        .unwrap_or_else(|| "none".into());
                     return print(
                         &value,
                         &format!(
-                            "Session: {}\nAgent: {}\nBinding: reused\nRevision: {}",
-                            session.id, agent, db.project.project_revision
+                            "Session: {}\nAgent: {}\nClaim: {}\nBinding: reused\nRevision: {}",
+                            session.id, agent, claim_note, revision
                         ),
                         json_output,
                     );

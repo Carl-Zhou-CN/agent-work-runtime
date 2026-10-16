@@ -691,6 +691,76 @@ fn session_start_conversation_binding_matches_the_mcp_surface() {
 }
 
 #[test]
+fn session_start_reuse_with_claim_acquires_the_claim() {
+    let f = Fixture::new();
+    let rev = f.revision();
+    let started = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--expected-revision",
+        &rev,
+    ]);
+    let session_id = started["session"]["id"].as_str().unwrap().to_string();
+
+    // Reusing the binding with --claim must not silently drop the claim.
+    let rev = f.revision();
+    let reused = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--claim",
+        "--ttl-ms",
+        "60000",
+        "--expected-revision",
+        &rev,
+    ]);
+    assert_eq!(reused["binding_reused"], serde_json::json!(true));
+    assert_eq!(reused["session"]["id"].as_str().unwrap(), session_id);
+    let claim = reused["claim"]
+        .as_object()
+        .expect("claim acquired on reuse");
+    assert!(claim["id"].as_str().is_some());
+    assert!(claim["session_id"].as_str().is_some());
+
+    // The claim is durable and owned by the reused session.
+    let project_id: Id = started["session"]["project_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let store = Store::open(&f.0.join(".awr").join("state.db")).unwrap();
+    let session: Id = session_id.parse().unwrap();
+    let claims = store.session_claims(project_id, session).unwrap();
+    assert!(
+        claims.iter().any(|c| c.session_id == session),
+        "reused session owns the acquired claim"
+    );
+}
+
+#[test]
 fn session_start_without_binding_flags_is_unchanged() {
     let f = Fixture::new();
     let rev = f.revision();
