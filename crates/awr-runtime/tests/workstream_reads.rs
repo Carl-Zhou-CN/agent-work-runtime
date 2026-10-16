@@ -249,7 +249,7 @@ fn resume_preflight_uses_the_source_sessions_scoped_branch() {
 }
 
 #[test]
-fn evidence_report_read_tolerates_a_single_trailing_newline_from_editors() {
+fn evidence_report_read_rejects_every_byte_change_with_actionable_guidance() {
     let mut f = Fixture::new();
     let body: &[u8] = b"Synthetic report";
     let locator = "report-newline.txt";
@@ -263,7 +263,7 @@ fn evidence_report_read_tolerates_a_single_trailing_newline_from_editors() {
                 external_key: "E-NL".into(),
                 evidence_type: "report".into(),
                 level: EvidenceLevel::Designed,
-                summary: "Newline tolerant evidence".into(),
+                summary: "Byte-exact evidence".into(),
                 locator: locator.into(),
                 sha256: Some(format!("{:x}", Sha256::digest(body))),
                 source_sha: None,
@@ -283,33 +283,56 @@ fn evidence_report_read_tolerates_a_single_trailing_newline_from_editors() {
         runtime.read_evidence_report_in_workstream(&denied, &selector, &evidence.external_key, 100),
         Err(Error::Workstream(WorkstreamError::AccessDenied))
     ));
-    // An editor or lint tool appended one LF after registration: still reads.
-    fs::write(f.root.join(locator), b"Synthetic report\n").unwrap();
-    let runtime = Runtime::attach(&mut f.store, f.project).unwrap();
-    let (_, bytes) = runtime
-        .read_evidence_report_in_workstream(&allowed, &selector, &evidence.external_key, 100)
-        .unwrap();
-    assert_eq!(bytes, b"Synthetic report\n");
-    // A single appended CRLF is tolerated the same way.
-    fs::write(f.root.join(locator), b"Synthetic report\r\n").unwrap();
-    let runtime = Runtime::attach(&mut f.store, f.project).unwrap();
-    let (_, bytes) = runtime
-        .read_evidence_report_in_workstream(&allowed, &selector, &evidence.external_key, 100)
-        .unwrap();
-    assert_eq!(bytes, b"Synthetic report\r\n");
-    // Real content changes still fail, naming both digests.
-    fs::write(f.root.join(locator), b"Synthetic report\nX").unwrap();
-    let runtime = Runtime::attach(&mut f.store, f.project).unwrap();
-    match runtime.read_evidence_report_in_workstream(
-        &allowed,
-        &selector,
-        &evidence.external_key,
-        100,
-    ) {
-        Err(Error::SourceConflict(message)) => {
-            assert!(message.contains("expected"), "{message}");
-            assert!(message.contains("actual"), "{message}");
+    // The binding is byte-exact: every change after registration, including
+    // a single appended LF, CRLF or a bare CR, is rejected.
+    for changed in [
+        &b"Synthetic report\n"[..],
+        &b"Synthetic report\r\n"[..],
+        &b"Synthetic report\r"[..],
+        &b"Synthetic report\n\n"[..],
+        &b"Synthetic report\nX"[..],
+    ] {
+        fs::write(f.root.join(locator), changed).unwrap();
+        let runtime = Runtime::attach(&mut f.store, f.project).unwrap();
+        match runtime.read_evidence_report_in_workstream(
+            &allowed,
+            &selector,
+            &evidence.external_key,
+            100,
+        ) {
+            Err(Error::SourceConflict(message)) => {
+                assert!(message.contains("expected"), "{message}");
+                assert!(message.contains("actual"), "{message}");
+                assert!(message.contains("re-register"), "{message}");
+            }
+            other => panic!("expected a source conflict for {changed:?}, got {other:?}"),
         }
-        other => panic!("expected a source conflict, got {other:?}"),
     }
+    // Registering the digest of the current bytes restores the binding.
+    let current = fs::read(f.root.join(locator)).unwrap();
+    f.store
+        .record_evidence(
+            f.project,
+            f.rev(),
+            EvidenceDraft {
+                work_item_key: Some("W1".into()),
+                external_key: "E-NL2".into(),
+                evidence_type: "report".into(),
+                level: EvidenceLevel::Designed,
+                summary: "Byte-exact evidence".into(),
+                locator: locator.into(),
+                sha256: Some(format!("{:x}", Sha256::digest(&current))),
+                source_sha: None,
+                command: None,
+                scope: vec!["W1".into()],
+                branch_id: None,
+                verified_at: None,
+            },
+        )
+        .unwrap();
+    let runtime = Runtime::attach(&mut f.store, f.project).unwrap();
+    let (_, bytes) = runtime
+        .read_evidence_report_in_workstream(&allowed, &selector, "E-NL2", 100)
+        .unwrap();
+    assert_eq!(bytes, current);
 }
