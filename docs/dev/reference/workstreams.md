@@ -455,9 +455,8 @@ requirement when source files differ from the stored projection.
 Execution adapters negotiate capabilities (`start`, `status_read`,
 `stop_confirmation`, `reconnect_resume`, `result_forensics`) separately from AWR
 admission, cancel and session end. L0 manual/`ExternalExecutionReport` remains
-first-class. Built-in named clients: `codex_cli` (auto-startable) and
-`claude_code` (not auto-startable). Unsupported capabilities return a human
-continuation path.
+first-class. Built-in named clients are `codex_cli` and `claude_code`; neither
+is auto-startable. Unsupported capabilities return a human continuation path.
 
 Independent child tasks under a parent keep task identity, own claims and
 resource bounds; dependencies order starts while independent work may run in

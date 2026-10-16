@@ -182,7 +182,8 @@ team-independent reviewers.
 
 ## Host adapter note
 
-`claude_code` supports status / reconnect / forensics only when backed by
-attributable observation; **start** and **stop_confirmation** return human
-continuation. Prefer reconnecting the same execution identity before starting
-anything new ([named-agent-host.md](named-agent-host.md)).
+`claude_code` supports status / forensics only when backed by
+attributable observation; **start**, **stop_confirmation** and
+**reconnect_resume** return human continuation. Prefer reconnecting the same
+execution identity before starting anything new
+([named-agent-host.md](named-agent-host.md)).

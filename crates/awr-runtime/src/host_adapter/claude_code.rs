@@ -1,6 +1,6 @@
-//! Claude Code named controlled adapter. Status/reconnect/forensics are supported;
-//! auto-start is intentionally not claimed — operators continue via L0 when start
-//! is required.
+//! Claude Code named controlled adapter. Status and result forensics are supported;
+//! auto-start, stop confirmation, and reconnect/resume are intentionally not
+//! claimed — operators continue via L0 when those are required.
 use super::{
     AdapterActionOutcome, ExecutionHostAdapter, NativeExecutionHandle, supported, unsupported,
 };

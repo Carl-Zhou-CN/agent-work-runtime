@@ -11,7 +11,7 @@
 | start | no → human continuation |
 | status_read | yes |
 | stop_confirmation | no → human continuation |
-| reconnect_resume | yes |
+| reconnect_resume | no → human continuation |
 | result_forensics | yes |
 
 ## Operator path
