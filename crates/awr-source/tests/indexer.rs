@@ -275,7 +275,7 @@ fn rebuild_restores_source_facts_without_inventing_runtime_history() {
 }
 
 #[test]
-fn unchanged_sources_are_not_reprojected_after_a_stale_marker() {
+fn unchanged_bytes_still_reproject_after_a_stale_marker_to_heal_the_projection() {
     let fixture = Fixture::new();
     let mut store = fixture.store();
     let manifest = manifest();
@@ -284,10 +284,12 @@ fn unchanged_sources_are_not_reprojected_after_a_stale_marker() {
     assert_eq!(first.indexed, 5);
     let baseline_revision = first.project_revision;
 
-    // Simulate an interrupted reindex: sources are marked stale without any
-    // byte change on disk.
-    for domain in ["ledger", "goal", "rules", "decisions"] {
-        let source = source(&store, first.project_id, domain);
+    // Simulate the state left by a failed projection or an interrupted
+    // reindex: sources are stale while the stored fingerprint still holds the
+    // last successfully projected bytes. Byte equality alone must not promote
+    // the failed sources back to fresh; the next reindex heals with exactly
+    // one reprojection pass.
+    for source in store.sources(first.project_id).unwrap() {
         store
             .mark_source_freshness(
                 &store.source(first.project_id, source.id).unwrap(),
@@ -298,15 +300,63 @@ fn unchanged_sources_are_not_reprojected_after_a_stale_marker() {
     let marked = store.project(first.project_id).unwrap().project_revision;
     assert!(marked > baseline_revision);
 
-    let recovered = index_project(&mut store, &fixture.0, &manifest, false).unwrap();
-    assert!(recovered.ok);
-    assert_eq!((recovered.indexed, recovered.unchanged), (0, 5));
-    // Nothing moved on disk, so recovery must not advance the revision.
-    assert_eq!(recovered.project_revision, marked);
+    let healed = index_project(&mut store, &fixture.0, &manifest, false).unwrap();
+    assert!(healed.ok);
+    assert_eq!((healed.indexed, healed.unchanged), (5, 0));
+    assert!(healed.project_revision > marked);
+    let after_heal = store.project(first.project_id).unwrap().project_revision;
+    assert_eq!(healed.project_revision, after_heal);
 
-    // An explicit reindex still reprojections on request.
-    let forced = index_project(&mut store, &fixture.0, &manifest, true).unwrap();
-    assert!(forced.ok);
-    assert_eq!(forced.indexed, 5);
-    assert!(forced.project_revision > marked);
+    // Once healthy again, unchanged reindexes stop advancing the revision.
+    let settled = index_project(&mut store, &fixture.0, &manifest, false).unwrap();
+    assert!(settled.ok);
+    assert_eq!((settled.indexed, settled.unchanged), (0, 5));
+    assert_eq!(settled.project_revision, after_heal);
+}
+
+#[test]
+fn retired_entity_returns_when_identical_bytes_are_restored() {
+    let fixture = Fixture::new();
+    let mut store = fixture.store();
+    let manifest = manifest();
+    let first = index_project(&mut store, &fixture.0, &manifest, false).unwrap();
+    assert!(first.ok);
+
+    // Retire one decision file, then restore the exact same bytes.
+    fs::remove_file(fixture.0.join("decisions/001.md")).unwrap();
+    let removed = index_project(&mut store, &fixture.0, &manifest, false).unwrap();
+    assert!(removed.ok);
+    assert_eq!(removed.retired, 1);
+
+    fs::write(
+        fixture.0.join("decisions/001.md"),
+        include_str!("../../../tests/fixtures/decisions/001-persistence.md"),
+    )
+    .unwrap();
+    let restored = index_project(&mut store, &fixture.0, &manifest, false).unwrap();
+    assert!(restored.ok);
+    assert_eq!(restored.retired, 0);
+    // The fingerprint of the restored file matches the last successful
+    // projection, but the retired entity must still be re-activated by a
+    // reprojection instead of being skipped by the unchanged fast path.
+    let readded = restored
+        .sources
+        .iter()
+        .find(|s| s.locator.ends_with("decisions/001.md"))
+        .unwrap();
+    assert_eq!(readded.action, "indexed");
+    assert_eq!(readded.freshness, Freshness::Fresh);
+    let decisions = store
+        .sources(first.project_id)
+        .unwrap()
+        .into_iter()
+        .find(|s| s.locator.ends_with("decisions/001.md"))
+        .unwrap();
+    assert_eq!(
+        store
+            .source_projection_payloads(&decisions, EntityKind::Decision)
+            .unwrap()
+            .len(),
+        1
+    );
 }
