@@ -101,7 +101,8 @@ pub fn prepare_completion(
         Some(branch) => store.resolve_branch(project.id, branch)?,
         None => project.current_branch_id,
     };
-    let bytes = crate::read::read_registered_file(
+    let report_path = crate::read::resolve_registered_path(store, project.id, &request.report)?;
+    let mut bytes = crate::read::read_registered_file(
         store,
         project.id,
         &request.report,
@@ -109,6 +110,16 @@ pub fn prepare_completion(
         None,
         1024 * 1024,
     )?;
+    // Canonical digest form: the report ends with exactly one trailing
+    // newline before its digest is computed, so the byte-exact registration
+    // binding survives editor and lint newline enforcement that would
+    // otherwise append a line ending after registration. The digest is taken
+    // over the normalized bytes that are actually stored, and every later
+    // strict read verifies those same bytes.
+    if !bytes.ends_with(b"\n") {
+        bytes.push(b'\n');
+        std::fs::write(&report_path, &bytes)?;
+    }
     let report = CompletionReport::parse(&bytes, &request.report).map_err(Error::InvalidSource)?;
     let evidence = Evidence {
         id: Id::new(),
