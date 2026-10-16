@@ -71,9 +71,9 @@ pub fn prepare_work_creation_with_fields(
             "Git sources remain read-only".into(),
         ));
     };
-    if path.starts_with(root.canonicalize()?.join(".awr")) {
+    if crate::is_runtime_owned_path(&root.canonicalize()?, &path) {
         return Err(Error::RuleViolation(
-            "runtime files cannot be task sources".into(),
+            "runtime-owned files cannot be task sources; relocate authored documents outside .awr (except .awr/intake) and reindex".into(),
         ));
     }
     if before.fingerprint != source.fingerprint {

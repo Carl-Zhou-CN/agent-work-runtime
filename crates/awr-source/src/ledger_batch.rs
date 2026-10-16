@@ -163,7 +163,7 @@ pub fn prepare_ledger_batch(
             "Git sources are read-only".into(),
         ));
     };
-    if path.starts_with(root.canonicalize()?.join(".awr")) {
+    if crate::is_runtime_owned_path(&root.canonicalize()?, &path) {
         return Err(Error::RuleViolation(
             "runtime files cannot be ledgers".into(),
         ));
