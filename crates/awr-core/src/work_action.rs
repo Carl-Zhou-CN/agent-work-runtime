@@ -132,6 +132,12 @@ impl WorkActionBinding {
             self.action,
             WorkAction::Progress | WorkAction::Unblock | WorkAction::Reopen
         ) {
+            if changes["next_action"].as_str().is_none() {
+                return Err(Error::InvalidInput(format!(
+                    "{:?} requires --next-action (1..4096 bytes) describing the next source-backed step; the source next_action is only rewritten through this explicit input",
+                    self.action
+                )));
+            }
             bounded(changes["next_action"].as_str(), 4096, "next_action")?;
         }
         if self.action == WorkAction::Block {

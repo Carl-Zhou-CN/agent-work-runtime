@@ -1040,10 +1040,152 @@ pub fn redact_sensitive_value(value: Value) -> Value {
     }
 }
 
+/// Schema validation errors embed the serde/serde_json message, which quotes
+/// the offending caller value (JSON string inputs are rendered verbatim
+/// inside double quotes). Submitted values must never reach the error text,
+/// so replace every double-quoted segment with `"…"` and keep the structural
+/// remainder (expected types, line/column info).
+pub fn redact_schema_error_detail(message: &str) -> String {
+    redact_backticked_spans(&redact_double_quoted(message))
+}
+
+fn redact_double_quoted(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut in_quotes = false;
+    let mut escaped = false;
+    for c in message.chars() {
+        if in_quotes {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_quotes = false;
+                out.push_str("\"…\"");
+            }
+        } else if c == '"' {
+            in_quotes = true;
+        } else {
+            out.push(c);
+        }
+    }
+    if in_quotes {
+        out.push_str("\"…");
+    }
+    out
+}
+
+/// Serde renders caller-controlled tokens in backticks too: unknown enum
+/// variants, unknown field names and invalid values. The only backticked
+/// spans serde copies from the schema are the field names after
+/// `missing field` / `duplicate field`, so those stay readable and every
+/// other span collapses to `` `…` ``.
+fn redact_backticked_spans(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    loop {
+        let Some(start) = rest.find('`') else {
+            out.push_str(rest);
+            break;
+        };
+        let Some(rel) = rest[start + 1..].find('`') else {
+            // Unterminated span: still caller-influenced, redact the tail.
+            out.push_str(&rest[..start]);
+            out.push_str("`…");
+            break;
+        };
+        let end = start + 1 + rel;
+        let before = rest[..start].trim_end();
+        let schema_named = before.ends_with("missing field") || before.ends_with("duplicate field");
+        out.push_str(&rest[..start]);
+        if schema_named {
+            out.push_str(&rest[start..=end]);
+        } else {
+            out.push_str("`…`");
+        }
+        rest = &rest[end + 1..];
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn schema_error_detail_drops_submitted_string_values() {
+        let secret = "sk-live-9f8e7d6c5b4a";
+        let detail = redact_schema_error_detail(&format!(
+            "invalid type: string \"{secret}\", expected u64 at line 1 column 12"
+        ));
+        assert_eq!(
+            detail,
+            "invalid type: string \"…\", expected u64 at line 1 column 12"
+        );
+        assert!(!detail.contains(secret));
+    }
+
+    #[test]
+    fn schema_error_detail_handles_escaped_quotes_and_keeps_backticked_names() {
+        let detail = redact_schema_error_detail(
+            "invalid type: string \"tok\\\"en-value\", expected a sequence",
+        );
+        assert_eq!(detail, "invalid type: string \"…\", expected a sequence");
+        assert!(!detail.contains("en-value"));
+        assert_eq!(
+            redact_schema_error_detail("missing field `verified_at` at line 1 column 40"),
+            "missing field `verified_at` at line 1 column 40"
+        );
+        assert_eq!(
+            redact_schema_error_detail("invalid type: string \"a\\\"b\", expected u64"),
+            "invalid type: string \"…\", expected u64"
+        );
+    }
+
+    #[test]
+    fn schema_error_detail_survives_unterminated_quotes() {
+        let detail = redact_schema_error_detail("invalid type: string \"unterminated");
+        assert_eq!(detail, "invalid type: string \"…");
+        assert!(!detail.contains("unterminated"));
+    }
+
+    #[test]
+    fn schema_error_detail_redacts_backticked_submitted_tokens() {
+        let secret = "sk-live-9f8e7d6c5b4a";
+        let detail = redact_schema_error_detail(&format!(
+            "unknown variant `{secret}`, expected one of `yaml-ledger-v1`, `markdown-directory-v1`"
+        ));
+        assert!(!detail.contains(secret), "{detail}");
+        assert!(detail.contains("unknown variant `…`"), "{detail}");
+
+        let detail = redact_schema_error_detail(&format!(
+            "unknown field `{secret}`, expected one of `version`, `source_sha`"
+        ));
+        assert!(!detail.contains(secret), "{detail}");
+        assert!(detail.contains("unknown field `…`"), "{detail}");
+
+        let detail =
+            redact_schema_error_detail("invalid value: integer `9007199254740993`, expected i64");
+        assert_eq!(detail, "invalid value: integer `…`, expected i64");
+
+        // Unterminated backtick span stays redacted too.
+        let detail = redact_schema_error_detail(&format!("unknown variant `{secret}"));
+        assert!(!detail.contains(secret), "{detail}");
+        assert!(detail.ends_with("`…"), "{detail}");
+    }
+
+    #[test]
+    fn schema_error_detail_keeps_schema_copied_field_names() {
+        assert_eq!(
+            redact_schema_error_detail("missing field `verified_at` at line 1 column 40"),
+            "missing field `verified_at` at line 1 column 40"
+        );
+        assert_eq!(
+            redact_schema_error_detail("duplicate field `source_sha` at line 3 column 5"),
+            "duplicate field `source_sha` at line 3 column 5"
+        );
+    }
 
     #[test]
     fn public_scalar_literals_have_complete_text_boundaries() {

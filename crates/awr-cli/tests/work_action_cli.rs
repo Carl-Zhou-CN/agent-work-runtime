@@ -785,3 +785,26 @@ fn an_intermediate_review_failure_retains_a_resumable_domain_proposal() {
     assert_eq!(applied["event"]["event_type"], "work.progressed");
     assert_eq!(f.work()["next_action"], "Review the retained draft");
 }
+
+#[test]
+fn progress_without_next_action_names_the_missing_input() {
+    let f = Fixture::new();
+    let session = f.session("W", "writer", true);
+    let sid = session["session"]["id"].as_str().unwrap();
+    let revision = f.revision();
+    let missing = f.run(&[
+        "work",
+        "progress",
+        "W",
+        "--session",
+        sid,
+        "--reason",
+        "Advanced the review",
+        "--expected-revision",
+        &revision,
+    ]);
+    f.error(&missing, "InvalidInput");
+    let message = String::from_utf8_lossy(&missing.stderr);
+    assert!(message.contains("requires --next-action"), "{message}");
+    assert_eq!(f.work()["status"], "ready");
+}

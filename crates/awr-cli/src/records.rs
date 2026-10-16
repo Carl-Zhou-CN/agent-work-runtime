@@ -158,8 +158,19 @@ pub fn evidence(root: &Path, command: &EvidenceCommand, json_output: bool) -> Re
                 }
             }
             let declared_branch = input.get("branch_id").is_some();
-            let mut draft: EvidenceDraft = serde_json::from_value(input).map_err(|_| {
-                Error::InvalidInput("evidence input does not match its schema".into())
+            if input
+                .get("verified_at")
+                .is_some_and(|value| value.is_string())
+            {
+                return Err(Error::InvalidInput(
+                    "verified_at must be Unix epoch milliseconds (a JSON integer, now_millis()), not a timestamp string".into(),
+                ));
+            }
+            let mut draft: EvidenceDraft = serde_json::from_value(input).map_err(|error| {
+                Error::InvalidInput(format!(
+                    "evidence input does not match its schema: {}",
+                    awr_core::redact_schema_error_detail(&error.to_string())
+                ))
             })?;
             if !declared_branch {
                 draft.branch_id = db.project.current_branch_id;

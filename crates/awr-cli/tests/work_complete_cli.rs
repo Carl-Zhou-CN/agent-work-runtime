@@ -818,3 +818,90 @@ fn completion_recovery_retains_newer_source_without_confirming_completion() {
         0
     );
 }
+
+#[test]
+fn completion_report_byte_mismatch_names_the_sha256_and_newline_cause() {
+    let f = Fixture::new();
+    f.organize();
+    let selected = f.evidence("E", &f.report(), |_| {});
+    // One trailing newline changes the bytes without changing the parsed JSON.
+    let path = f.root.join(&selected.locator);
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.push(b'\n');
+    fs::write(&path, &bytes).unwrap();
+    let result = f.complete(&f.input());
+    Fixture::error(&result, "SourceConflict");
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        message.contains("SHA256 bound at registration"),
+        "{message}"
+    );
+    assert!(message.contains("trailing newlines"), "{message}");
+    assert!(
+        message.contains(selected.sha256.as_deref().unwrap()),
+        "{message}"
+    );
+}
+
+#[test]
+fn completion_report_criterion_mismatch_names_the_field_without_the_submitted_text() {
+    let f = Fixture::new();
+    f.organize();
+    let mut report = f.report();
+    // A criterion that does not exist in the ledger, shaped like private
+    // content; the diagnostic names the JSON pointer but must not echo it.
+    let submitted = "reviewed privately by 9f8e7d6c5b4a";
+    report["checks"][0]["criteria"] = json!([C1, submitted]);
+    let selected = f.evidence("E", &report, |_| {});
+    assert!(selected.sha256.is_some());
+    let result = f.complete(&f.input());
+    Fixture::error(&result, "EvidenceMissing");
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(message.contains("/checks/0/criteria/1"), "{message}");
+    assert!(
+        message.contains("authoritative acceptance criterion"),
+        "{message}"
+    );
+    assert!(!message.contains(submitted), "{message}");
+}
+
+#[test]
+fn completion_schema_error_does_not_echo_submitted_values() {
+    let f = Fixture::new();
+    // Passes the public-content filter (no credential keywords) but is still a
+    // private submitted value; the serde echo must not surface it verbatim.
+    let value = "private-hostname-9f8e7d6c5b4a.internal";
+    let mut input = f.input();
+    input["version"] = json!(value);
+    let result = f.complete(&input);
+    Fixture::error(&result, "InvalidInput");
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(message.contains("does not match its schema"), "{message}");
+    assert!(!message.contains(value), "{message}");
+    assert!(message.contains('…'), "{message}");
+}
+
+#[test]
+fn completion_binding_errors_name_fields_without_submitted_values() {
+    let f = Fixture::new();
+    f.organize();
+    // The report carries secret-shaped submitted values in every field the
+    // binding checks; each diagnostic names the JSON pointer and the static
+    // rule, never the submitted content.
+    let mut report = f.report();
+    report["work_item"] = json!("secret-project-9f8e7d6c5b4a");
+    report["command"] = json!("curl -H private-9f8e7d6c5b4a");
+    report["scope"] = json!(["secret-scope-9f8e7d6c5b4a"]);
+    let selected = f.evidence("E", &report, |_| {});
+    assert!(selected.sha256.is_some());
+    let result = f.complete(&f.input());
+    Fixture::error(&result, "EvidenceMissing");
+    let message = String::from_utf8_lossy(&result.stderr);
+    assert!(message.contains("/work_item"), "{message}");
+    assert!(
+        !message.contains("secret-project-9f8e7d6c5b4a"),
+        "{message}"
+    );
+    assert!(!message.contains("private-9f8e7d6c5b4a"), "{message}");
+    assert!(!message.contains("secret-scope-9f8e7d6c5b4a"), "{message}");
+}

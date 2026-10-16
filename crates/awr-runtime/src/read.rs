@@ -202,9 +202,9 @@ pub(crate) fn read_registered_file(
     if let Some(expected) = expected_sha {
         let actual = format!("{:x}", Sha256::digest(&bytes));
         if !actual.eq_ignore_ascii_case(expected) {
-            return Err(Error::SourceConflict(
-                "registered content SHA256 does not match".into(),
-            ));
+            return Err(Error::SourceConflict(format!(
+                "registered content bytes no longer match the SHA256 bound at registration: expected {expected}, actual {actual}; the file must stay byte-identical, so check for added or removed trailing newlines, whitespace or line-ending changes since the evidence was registered"
+            )));
         }
     }
     ensure_public_bytes(&bytes)?;
