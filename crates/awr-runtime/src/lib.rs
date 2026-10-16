@@ -243,6 +243,17 @@ impl<'a> Runtime<'a> {
     ) -> Result<(SessionStarted, Event)> {
         self.store.start_session(self.project, expected, draft)
     }
+    /// Start (or reuse) a session bound to a host client/conversation pair,
+    /// the same binding surface the MCP channel uses.
+    pub fn start_bound_session(
+        &mut self,
+        expected: Revision,
+        draft: SessionDraft,
+        binding: awr_core::McpSessionBinding,
+    ) -> Result<(SessionStarted, Event)> {
+        self.store
+            .start_bound_session(self.project, expected, draft, binding)
+    }
     /// Explicit scope selection, validated against the work when one is supplied.
     pub fn start_session_in_workstream(
         &mut self,

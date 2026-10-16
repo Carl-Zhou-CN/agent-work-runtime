@@ -62,6 +62,13 @@ pub enum SessionCommand {
         claim: bool,
         #[arg(long, requires = "claim")]
         ttl_ms: Option<u64>,
+        /// Host client id for the conversation binding (MCP-compatible).
+        #[arg(long, requires = "conversation")]
+        client: Option<String>,
+        /// Host conversation id; binds this session so the MCP channel
+        /// resolves the same session without a separate client bind.
+        #[arg(long, requires = "client")]
+        conversation: Option<String>,
         #[arg(long)]
         expected_revision: Revision,
     },
@@ -296,8 +303,21 @@ pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<(
             model,
             claim,
             ttl_ms,
+            client,
+            conversation,
             expected_revision,
         } => {
+            let binding = match (client, conversation) {
+                (Some(client), Some(conversation)) => {
+                    let binding = McpSessionBinding {
+                        client: client.clone(),
+                        conversation: conversation.clone(),
+                    };
+                    binding.validate()?;
+                    Some(binding)
+                }
+                _ => None,
+            };
             let draft = SessionDraft {
                 work_item_key: work.clone(),
                 agent_id: agent.clone(),
@@ -307,8 +327,93 @@ pub fn run(root: &Path, command: &SessionCommand, json_output: bool) -> Result<(
                 claim: *claim,
                 claim_ttl_ms: *ttl_ms,
             };
-            let (started, event) = Runtime::attach(&mut db.store, project)?
-                .start_session(*expected_revision, draft)?;
+            // With a binding, reuse an existing conversation session exactly
+            // like the MCP channel does, so both surfaces resolve the same
+            // session instead of splitting host bindings.
+            if let Some(binding) = &binding {
+                if let Some(session) = db.store.mcp_bound_session(project, binding)? {
+                    let work_matches = match (&session.work_item_id, work.as_deref()) {
+                        (_, None) => true,
+                        // Propagate lookup failures instead of misreporting a
+                        // store error as an identity conflict; a missing work
+                        // key is a NotFound, which is accurate on its own.
+                        (Some(id), Some(key)) => db.store.work_identity(project, key)? == *id,
+                        (None, Some(_)) => false,
+                    };
+                    if !work_matches
+                        || session.agent_id != *agent
+                        || session.provider != *provider
+                        || session.model != *model
+                        || session.branch_id != db.project.current_branch_id
+                    {
+                        return Err(Error::SourceConflict(
+                            "conversation already belongs to different work or identity".into(),
+                        ));
+                    }
+                    db.check_revision()?;
+                    // A reused binding must not report a usable session that
+                    // is already closed; the repair is to resume it.
+                    if session.status != "active" {
+                        return Err(Error::InvalidTransition(format!(
+                            "conversation binding resolves session {} that is {}; resume the session or start a new conversation",
+                            session.id, session.status
+                        )));
+                    }
+                    // The same command with a new binding rejects a stale
+                    // --expected-revision inside the transaction; reuse must
+                    // enforce it too instead of silently accepting it.
+                    if *expected_revision != db.project.project_revision {
+                        return Err(Error::RevisionConflict {
+                            expected: *expected_revision,
+                            actual: db.project.project_revision,
+                        });
+                    }
+                    // A caller scripting `session start --claim` must not
+                    // silently lose the claim on the reuse path: acquire it
+                    // on the resolved session, exactly like `work claim`.
+                    // The store rejects a closed session or a conflicting
+                    // active claim, so reuse never reports success for an
+                    // unmet requested condition or steals a claim.
+                    let (claim, revision) = if *claim {
+                        let (claim, event) = Runtime::attach(&mut db.store, project)?
+                            .acquire_claim(*expected_revision, session.id, *ttl_ms)?;
+                        (Some(claim), event.project_revision)
+                    } else {
+                        (None, db.project.project_revision)
+                    };
+                    let mut value = db.metadata(revision);
+                    value["session"] = json!(session);
+                    value["binding"] = json!(binding);
+                    value["binding_reused"] = json!(true);
+                    value["claim"] = json!(claim);
+                    // The caller sees the session's actual claim state even
+                    // when it did not request one.
+                    value["active_claims"] = json!(
+                        db.store
+                            .session_claims(project, session.id)?
+                            .iter()
+                            .filter(|c| c.status == "active")
+                            .collect::<Vec<_>>()
+                    );
+                    let claim_note = claim
+                        .as_ref()
+                        .map(|c| c.id.to_string())
+                        .unwrap_or_else(|| "none".into());
+                    return print(
+                        &value,
+                        &format!(
+                            "Session: {}\nAgent: {}\nClaim: {}\nBinding: reused\nRevision: {}",
+                            session.id, agent, claim_note, revision
+                        ),
+                        json_output,
+                    );
+                }
+            }
+            let mut runtime = Runtime::attach(&mut db.store, project)?;
+            let (started, event) = match binding {
+                Some(binding) => runtime.start_bound_session(*expected_revision, draft, binding)?,
+                None => runtime.start_session(*expected_revision, draft)?,
+            };
             let mut value = db.metadata(event.project_revision);
             value["session"] = json!(started.session);
             value["claim"] = json!(started.claim);

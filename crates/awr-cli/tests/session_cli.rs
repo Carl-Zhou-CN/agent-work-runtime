@@ -657,3 +657,420 @@ fn unassigned_handoff_releases_work_and_keeps_checkpoint_for_later_pickup() {
     );
     f.start("later-worker", true);
 }
+
+#[test]
+fn session_start_conversation_binding_matches_the_mcp_surface() {
+    let f = Fixture::new();
+    let rev = f.revision();
+
+    // A CLI start with --client/--conversation resolves for the MCP channel.
+    let started = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--expected-revision",
+        &rev,
+    ]);
+    let session_id = started["session"]["id"].as_str().unwrap().to_string();
+    assert_eq!(started["binding_reused"], Value::Null);
+
+    // The same binding resolves the session through the store, as the MCP
+    // channel does, and a repeated start reuses it without a new session.
+    let project_id: Id = started["session"]["project_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let store = Store::open(&f.0.join(".awr").join("state.db")).unwrap();
+    let binding = awr_core::McpSessionBinding {
+        client: "cli-host".into(),
+        conversation: "conv-1".into(),
+    };
+    let resolved = store
+        .mcp_bound_session(project_id, &binding)
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.id.to_string(), session_id);
+    drop(store);
+
+    let rev = f.revision();
+    let reused = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--expected-revision",
+        &rev,
+    ]);
+    assert_eq!(reused["binding_reused"], serde_json::json!(true));
+    assert_eq!(reused["session"]["id"].as_str().unwrap(), session_id);
+
+    // A different identity on the same conversation is refused.
+    let rev = f.revision();
+    f.error(
+        &[
+            "session",
+            "start",
+            "--work",
+            "W",
+            "--agent",
+            "other-agent",
+            "--provider",
+            "fixture",
+            "--model",
+            "test",
+            "--client",
+            "cli-host",
+            "--conversation",
+            "conv-1",
+            "--expected-revision",
+            &rev,
+        ],
+        "SourceConflict",
+    );
+}
+
+#[test]
+fn session_start_reuse_with_claim_acquires_the_claim() {
+    let f = Fixture::new();
+    let rev = f.revision();
+    let started = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--expected-revision",
+        &rev,
+    ]);
+    let session_id = started["session"]["id"].as_str().unwrap().to_string();
+
+    // Reusing the binding with --claim must not silently drop the claim.
+    let rev = f.revision();
+    let reused = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--claim",
+        "--ttl-ms",
+        "60000",
+        "--expected-revision",
+        &rev,
+    ]);
+    assert_eq!(reused["binding_reused"], serde_json::json!(true));
+    assert_eq!(reused["session"]["id"].as_str().unwrap(), session_id);
+    let claim = reused["claim"]
+        .as_object()
+        .expect("claim acquired on reuse");
+    assert!(claim["id"].as_str().is_some());
+    assert!(claim["session_id"].as_str().is_some());
+
+    // The claim is durable and owned by the reused session.
+    let project_id: Id = started["session"]["project_id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let store = Store::open(&f.0.join(".awr").join("state.db")).unwrap();
+    let session: Id = session_id.parse().unwrap();
+    let claims = store.session_claims(project_id, session).unwrap();
+    assert!(
+        claims.iter().any(|c| c.session_id == session),
+        "reused session owns the acquired claim"
+    );
+}
+
+#[test]
+fn session_start_without_binding_flags_is_unchanged() {
+    let f = Fixture::new();
+    let rev = f.revision();
+    let started = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "plain",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--expected-revision",
+        &rev,
+    ]);
+    assert!(started["session"]["id"].as_str().is_some());
+    assert_eq!(started["binding_reused"], Value::Null);
+}
+
+#[test]
+fn session_start_reuse_enforces_the_expected_revision() {
+    let f = Fixture::new();
+    let rev = f.revision();
+    let started = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--expected-revision",
+        &rev,
+    ]);
+    // The revision at start is stale after the start event; the same command
+    // with a new binding would reject it, and reuse must too.
+    let stale = started["session"]["start_project_revision"]
+        .as_i64()
+        .unwrap()
+        .to_string();
+    f.error(
+        &[
+            "session",
+            "start",
+            "--work",
+            "W",
+            "--agent",
+            "host-agent",
+            "--provider",
+            "fixture",
+            "--model",
+            "test",
+            "--client",
+            "cli-host",
+            "--conversation",
+            "conv-1",
+            "--expected-revision",
+            &stale,
+        ],
+        "RevisionConflict",
+    );
+}
+
+#[test]
+fn session_start_reuse_rejects_a_closed_session_with_repair_guidance() {
+    let f = Fixture::new();
+    let rev = f.revision();
+    let started = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--expected-revision",
+        &rev,
+    ]);
+    let session_id = started["session"]["id"].as_str().unwrap().to_string();
+    f.ok(&[
+        "session",
+        "end",
+        "--session",
+        &session_id,
+        "--expected-revision",
+        &f.revision(),
+    ]);
+    let result = f.run(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--expected-revision",
+        &f.revision(),
+    ]);
+    assert!(!result.status.success());
+    let payload: Value = serde_json::from_slice(&result.stderr).unwrap();
+    assert_eq!(payload["code"], "InvalidTransition");
+    let message = payload["message"].as_str().unwrap();
+    assert!(message.contains("resume the session"), "{message}");
+}
+
+#[test]
+fn session_start_reuse_never_steals_another_sessions_claim() {
+    let f = Fixture::new();
+    let rev = f.revision();
+    let started = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--expected-revision",
+        &rev,
+    ]);
+    // A different session acquires the work claim first.
+    let other = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "other-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--expected-revision",
+        &f.revision(),
+    ]);
+    let other_id = other["session"]["id"].as_str().unwrap().to_string();
+    f.ok(&[
+        "work",
+        "claim",
+        "W",
+        "--session",
+        &other_id,
+        "--expected-revision",
+        &f.revision(),
+    ]);
+    // Reuse with --claim must not steal it.
+    f.error(
+        &[
+            "session",
+            "start",
+            "--work",
+            "W",
+            "--agent",
+            "host-agent",
+            "--provider",
+            "fixture",
+            "--model",
+            "test",
+            "--client",
+            "cli-host",
+            "--conversation",
+            "conv-1",
+            "--claim",
+            "--expected-revision",
+            &f.revision(),
+        ],
+        "ClaimConflict",
+    );
+}
+
+#[test]
+fn session_start_reuse_reacquires_an_expired_claim() {
+    let f = Fixture::new();
+    let rev = f.revision();
+    let started = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--claim",
+        "--ttl-ms",
+        "1",
+        "--expected-revision",
+        &rev,
+    ]);
+    let first_claim = started["claim"]["id"].as_str().unwrap().to_string();
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    // The claim has expired; a repeated start reuses the session and the
+    // reacquired claim is a new active one, not the expired record.
+    let reused = f.ok(&[
+        "session",
+        "start",
+        "--work",
+        "W",
+        "--agent",
+        "host-agent",
+        "--provider",
+        "fixture",
+        "--model",
+        "test",
+        "--client",
+        "cli-host",
+        "--conversation",
+        "conv-1",
+        "--claim",
+        "--expected-revision",
+        &f.revision(),
+    ]);
+    assert_eq!(reused["binding_reused"], serde_json::json!(true));
+    let reacquired = reused["claim"]["id"].as_str().unwrap();
+    assert_ne!(reacquired, first_claim);
+}
