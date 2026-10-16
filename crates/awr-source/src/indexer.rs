@@ -426,8 +426,18 @@ fn index_one(
     }
     let snapshot = observed
         .snapshot
+        .clone()
         .ok_or_else(|| Error::SourceUnavailable("source returned no snapshot".into()))?;
     let mut source = observed.source;
+    // Only a healthy projection may take the unchanged fast path. Byte
+    // equality alone cannot prove the indexed state is current: after a
+    // failed projection or a retirement the stored fingerprint still holds
+    // the last successful value, so unchanged bytes must reproject to heal
+    // the retained error or re-activate retired entities. Skipping that
+    // reprojection would leave the projection stuck (for example a restored
+    // malformed ledger keeps reporting source_unreadable, or a re-added
+    // identical file stays retired). A configuration change or a read
+    // failure (changed=false, snapshot=None) also takes the path below.
     if mode != Some(true)
         && !observed.changed
         && source.freshness == Freshness::Fresh
