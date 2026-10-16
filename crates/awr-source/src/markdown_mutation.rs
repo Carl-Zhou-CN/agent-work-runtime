@@ -291,8 +291,10 @@ pub fn prepare_markdown_mutation(
     let Locator::File(path) = locator else {
         return Err(unsupported("Git sources remain read-only"));
     };
-    if path.starts_with(root.canonicalize()?.join(".awr")) {
-        return Err(unsupported("runtime files cannot be work sources"));
+    if crate::is_runtime_owned_path(&root.canonicalize()?, &path) {
+        return Err(unsupported(
+            "runtime-owned files cannot be work sources; relocate authored documents outside .awr (except .awr/intake) and reindex",
+        ));
     }
     if before.fingerprint != proposal.base_fingerprint {
         return Err(Error::SourceConflict(
