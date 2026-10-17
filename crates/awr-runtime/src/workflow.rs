@@ -101,8 +101,7 @@ pub fn prepare_completion(
         Some(branch) => store.resolve_branch(project.id, branch)?,
         None => project.current_branch_id,
     };
-    let report_path = crate::read::resolve_registered_path(store, project.id, &request.report)?;
-    let mut bytes = crate::read::read_registered_file(
+    let bytes = crate::read::read_registered_file(
         store,
         project.id,
         &request.report,
@@ -110,15 +109,18 @@ pub fn prepare_completion(
         None,
         1024 * 1024,
     )?;
-    // Canonical digest form: the report ends with exactly one trailing
-    // newline before its digest is computed, so the byte-exact registration
-    // binding survives editor and lint newline enforcement that would
-    // otherwise append a line ending after registration. The digest is taken
-    // over the normalized bytes that are actually stored, and every later
-    // strict read verifies those same bytes.
+    // Strict preflight: this command derives evidence metadata without
+    // registering or writing anything, so it never modifies the caller's
+    // report file. A report that lacks exactly one trailing newline is the
+    // common editor/lint artifact; report the digest the normalized bytes
+    // would have and let the caller normalize the file itself.
     if !bytes.ends_with(b"\n") {
-        bytes.push(b'\n');
-        std::fs::write(&report_path, &bytes)?;
+        let mut normalized = bytes.clone();
+        normalized.push(b'\n');
+        let would = format!("{:x}", Sha256::digest(&normalized));
+        return Err(Error::InvalidInput(format!(
+            "completion report must end with exactly one trailing newline before its digest is bound: the digest of the report with one appended LF would be {would}; normalize the report file and rerun this preflight"
+        )));
     }
     let report = CompletionReport::parse(&bytes, &request.report).map_err(Error::InvalidSource)?;
     let evidence = Evidence {

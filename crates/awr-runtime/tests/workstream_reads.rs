@@ -303,7 +303,7 @@ fn evidence_report_read_rejects_every_byte_change_with_actionable_guidance() {
             Err(Error::SourceConflict(message)) => {
                 assert!(message.contains("expected"), "{message}");
                 assert!(message.contains("actual"), "{message}");
-                assert!(message.contains("re-register"), "{message}");
+                assert!(message.contains("byte-identical"), "{message}");
             }
             other => panic!("expected a source conflict for {changed:?}, got {other:?}"),
         }
