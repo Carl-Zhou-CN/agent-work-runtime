@@ -1364,6 +1364,69 @@ fn work_prepare_completion_warns_on_non_canonical_reports_without_touching_the_f
     assert!(warning.contains("more than one newline"), "{warning}");
     assert!(warning.contains(&would), "{warning}");
 
+    // Windows CRLF endings are non-canonical too: a single CRLF warns with
+    // the LF-converted digest, and doubled CRLFs count as multiple endings.
+    let crlf = [bytes.as_slice(), b"\r\n"].concat();
+    fs::write(f.root.join(locator), &crlf).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("CRLF"), "{warning}");
+    assert!(warning.contains(&would), "{warning}");
+    assert_eq!(
+        prepared["report_sha256"].as_str().unwrap(),
+        awr_source::fingerprint(&crlf).trim_start_matches("sha256:")
+    );
+    let doubled_crlf = [bytes.as_slice(), b"\r\n\r\n"].concat();
+    fs::write(f.root.join(locator), &doubled_crlf).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("more than one newline"), "{warning}");
+    assert!(warning.contains(&would), "{warning}");
+
+    // A bare trailing CR (no LF) is not a line ending: it warns as a missing
+    // newline, with the digest the exact stored bytes plus one LF would have
+    // (the bare-`\r` case the second-round review asked to cover).
+    let bare_cr = [bytes.as_slice(), b"\r"].concat();
+    fs::write(f.root.join(locator), &bare_cr).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("no trailing newline"), "{warning}");
+    let bare_cr_canonical = [bare_cr.as_slice(), b"\n"].concat();
+    assert!(
+        warning.contains(awr_source::fingerprint(&bare_cr_canonical).trim_start_matches("sha256:")),
+        "{warning}"
+    );
+
     // The canonical form produces no warning; the digest still binds the
     // exact stored bytes and completion verifies strictly.
     fs::write(f.root.join(locator), &canonical).unwrap();

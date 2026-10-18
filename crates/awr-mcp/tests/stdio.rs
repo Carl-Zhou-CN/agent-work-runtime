@@ -850,6 +850,18 @@ async fn report_preflight_derives_bytes_and_coverage_without_recording_evidence(
         format!("{:x}", Sha256::digest(&bytes))
     );
     assert_eq!(fs::read(f.root.join("report.json")).unwrap(), bytes);
+    // Windows CRLF endings are non-canonical but advisory only: the digest
+    // still binds the exact stored CRLF bytes and the warning names the
+    // LF-converted canonical form.
+    let crlf = [bytes.as_slice(), b"\r\n"].concat();
+    fs::write(f.root.join("report.json"), &crlf).unwrap();
+    let result = success(call(&client, "awr_completion_prepare", args.clone()).await);
+    let warning = result["warning"].as_str().unwrap();
+    assert!(warning.contains("CRLF"), "{warning}");
+    assert_eq!(
+        result["report_sha256"],
+        format!("{:x}", Sha256::digest(&crlf))
+    );
     // The canonical form produces no warning; the digest binds to the
     // exact stored bytes.
     fs::write(f.root.join("report.json"), &normalized).unwrap();
