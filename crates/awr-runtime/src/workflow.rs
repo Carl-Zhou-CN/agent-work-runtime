@@ -109,16 +109,14 @@ pub fn prepare_completion(
         None,
         1024 * 1024,
     )?;
-    // Canonical report form is exactly one trailing LF line ending. The rule
-    // is advisory for this release: common hosts write reports via json.dumps,
-    // JSON.stringify or serde_json::to_writer, none of which append a
-    // newline, so the preflight keeps accepting such reports and returns a
+    // Canonical report form is exactly one trailing LF line ending. The form
+    // is advisory: common hosts write reports via json.dumps, JSON.stringify
+    // or serde_json::to_writer, none of which append a newline, so the
+    // preflight keeps accepting such reports and returns a descriptive
     // warning with the digest the canonical bytes would have. Line endings
     // are counted as LF or CRLF units, so Windows-formatted reports get the
-    // same advisory treatment (CRLF is non-canonical but never refused). A
-    // future release will require the canonical form once hosts normalize on
-    // their side. The preflight still never modifies the caller's report
-    // file.
+    // same treatment (CRLF is non-canonical but never refused). The
+    // preflight still never modifies the caller's report file.
     let mut content_end = bytes.len();
     let mut endings = 0usize;
     loop {
@@ -144,7 +142,7 @@ pub fn prepare_completion(
             "it ends with a CRLF line ending instead of a single LF"
         };
         Some(format!(
-            "report is not in canonical form: {shape}; the canonical form ends with exactly one trailing newline and its digest would be {would}. Advisory for this release; a future release will require the canonical form"
+            "report is not in canonical form: {shape}; the canonical form ends with exactly one trailing newline and its digest would be {would}"
         ))
     } else {
         None

@@ -39,8 +39,8 @@ class ExecutionReports:
 
     def store(self, suffix, value):
         # One trailing newline is the canonical stored form: the completion
-        # preflight binds the digest to the exact stored bytes and refuses
-        # reports that do not end with a single LF.
+        # preflight binds the digest to the exact stored bytes and warns (it
+        # does not refuse) when a report is not in that form.
         path = protected_file(self.wf.path.parent, suffix,
                               (json.dumps(value, ensure_ascii=False, indent=2) + '\n').encode())
         return dict(path=str(path), sha256=digest(path))

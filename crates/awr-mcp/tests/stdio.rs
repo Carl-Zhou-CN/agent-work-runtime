@@ -839,7 +839,7 @@ async fn report_preflight_derives_bytes_and_coverage_without_recording_evidence(
     let result = success(call(&client, "awr_completion_prepare", args.clone()).await);
     let warning = result["warning"].as_str().unwrap();
     assert!(warning.contains("no trailing newline"), "{warning}");
-    assert!(warning.contains("Advisory"), "{warning}");
+    assert!(warning.contains("canonical form"), "{warning}");
     let normalized = [bytes.as_slice(), b"\n"].concat();
     assert!(
         warning.contains(&format!("{:x}", Sha256::digest(&normalized))),

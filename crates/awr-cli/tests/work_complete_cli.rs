@@ -1332,7 +1332,7 @@ fn work_prepare_completion_warns_on_non_canonical_reports_without_touching_the_f
     ]);
     let warning = prepared["warning"].as_str().unwrap();
     assert!(warning.contains("no trailing newline"), "{warning}");
-    assert!(warning.contains("Advisory"), "{warning}");
+    assert!(warning.contains("canonical form"), "{warning}");
     let canonical = [bytes.as_slice(), b"\n"].concat();
     let would = awr_source::fingerprint(&canonical)
         .trim_start_matches("sha256:")
