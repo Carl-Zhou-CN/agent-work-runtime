@@ -1305,46 +1305,20 @@ fn completion_binding_errors_name_fields_without_submitted_values() {
 }
 
 #[test]
-fn work_prepare_completion_reports_the_normalized_digest_without_touching_the_file() {
+fn work_prepare_completion_warns_on_non_canonical_reports_without_touching_the_file() {
     let f = Fixture::new();
     f.organize();
-    // The report is authored without the final newline that lint would add.
+    // The report is authored without the final newline that lint would add —
+    // the form json.dumps, JSON.stringify and serde_json::to_writer produce.
     let report = f.report();
     let locator = "report-prepare.json";
     let bytes = serde_json::to_vec_pretty(&report).unwrap();
     assert!(!bytes.ends_with(b"\n"));
     fs::write(f.root.join(locator), &bytes).unwrap();
 
-    // Preflight never rewrites the caller's file: it refuses and names the
-    // digest the normalized report would have.
-    let result = f.run(&[
-        "work",
-        "prepare-completion",
-        "W",
-        "--report",
-        locator,
-        "--evidence-key",
-        "E-PREP",
-        "--source-sha",
-        SHA,
-    ]);
-    Fixture::error(&result, "InvalidInput");
-    let message = String::from_utf8_lossy(&result.stderr);
-    assert!(
-        message.contains("exactly one trailing newline"),
-        "{message}"
-    );
-    let normalized = [bytes.as_slice(), b"\n"].concat();
-    let would = awr_source::fingerprint(&normalized)
-        .trim_start_matches("sha256:")
-        .to_string();
-    assert!(message.contains(&would), "{message}");
-    // The caller's file is untouched.
-    assert_eq!(fs::read(f.root.join(locator)).unwrap(), bytes.as_slice());
-
-    // The caller normalizes the report itself, then the preflight derives a
-    // digest over the exact stored bytes and completion verifies strictly.
-    fs::write(f.root.join(locator), &normalized).unwrap();
+    // The rule is advisory for this release: the preflight succeeds, keeps
+    // the byte-exact digest of the stored report, and returns a warning that
+    // names the canonical form and the digest its bytes would have.
     let prepared = f.ok(&[
         "work",
         "prepare-completion",
@@ -1356,9 +1330,58 @@ fn work_prepare_completion_reports_the_normalized_digest_without_touching_the_fi
         "--source-sha",
         SHA,
     ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("no trailing newline"), "{warning}");
+    assert!(warning.contains("Advisory"), "{warning}");
+    let canonical = [bytes.as_slice(), b"\n"].concat();
+    let would = awr_source::fingerprint(&canonical)
+        .trim_start_matches("sha256:")
+        .to_string();
+    assert!(warning.contains(&would), "{warning}");
+    // The digest binds the exact stored bytes and the caller's file is
+    // untouched.
     assert_eq!(
         prepared["report_sha256"].as_str().unwrap(),
-        awr_source::fingerprint(&normalized).trim_start_matches("sha256:")
+        awr_source::fingerprint(&bytes).trim_start_matches("sha256:")
+    );
+    assert_eq!(fs::read(f.root.join(locator)).unwrap(), bytes.as_slice());
+
+    // More than one trailing newline is equally non-canonical.
+    let doubled = [bytes.as_slice(), b"\n\n"].concat();
+    fs::write(f.root.join(locator), &doubled).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    let warning = prepared["warning"].as_str().unwrap();
+    assert!(warning.contains("more than one newline"), "{warning}");
+    assert!(warning.contains(&would), "{warning}");
+
+    // The canonical form produces no warning; the digest still binds the
+    // exact stored bytes and completion verifies strictly.
+    fs::write(f.root.join(locator), &canonical).unwrap();
+    let prepared = f.ok(&[
+        "work",
+        "prepare-completion",
+        "W",
+        "--report",
+        locator,
+        "--evidence-key",
+        "E-PREP",
+        "--source-sha",
+        SHA,
+    ]);
+    assert!(prepared["warning"].is_null(), "{}", prepared["warning"]);
+    assert_eq!(
+        prepared["report_sha256"].as_str().unwrap(),
+        awr_source::fingerprint(&canonical).trim_start_matches("sha256:")
     );
 
     // Registering the prepared digest and completing verifies strictly.

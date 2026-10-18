@@ -109,19 +109,35 @@ pub fn prepare_completion(
         None,
         1024 * 1024,
     )?;
-    // Strict preflight: this command derives evidence metadata without
-    // registering or writing anything, so it never modifies the caller's
-    // report file. A report that lacks exactly one trailing newline is the
-    // common editor/lint artifact; report the digest the normalized bytes
-    // would have and let the caller normalize the file itself.
-    if !bytes.ends_with(b"\n") {
-        let mut normalized = bytes.clone();
-        normalized.push(b'\n');
-        let would = format!("{:x}", Sha256::digest(&normalized));
-        return Err(Error::InvalidInput(format!(
-            "completion report must end with exactly one trailing newline before its digest is bound: the digest of the report with one appended LF would be {would}; normalize the report file and rerun this preflight"
-        )));
+    // Canonical report form is exactly one trailing newline. The rule is
+    // advisory for this release: common hosts write reports via json.dumps,
+    // JSON.stringify or serde_json::to_writer, none of which append a
+    // newline, so the preflight keeps accepting such reports and returns a
+    // warning with the digest the canonical bytes would have. A future
+    // release will require the canonical form once hosts normalize on their
+    // side. The preflight still never modifies the caller's report file.
+    let mut trailing = 0usize;
+    while bytes.len() > trailing && bytes[bytes.len() - 1 - trailing] == b'\n' {
+        trailing += 1;
     }
+    let warning = if trailing != 1 {
+        let mut canonical = bytes.clone();
+        while canonical.ends_with(b"\n") {
+            canonical.pop();
+        }
+        canonical.push(b'\n');
+        let would = format!("{:x}", Sha256::digest(&canonical));
+        let shape = if trailing == 0 {
+            "it has no trailing newline"
+        } else {
+            "it ends with more than one newline"
+        };
+        Some(format!(
+            "report is not in canonical form: {shape}; the canonical form ends with exactly one trailing newline and its digest would be {would}. Advisory for this release; a future release will require the canonical form"
+        ))
+    } else {
+        None
+    };
     let report = CompletionReport::parse(&bytes, &request.report).map_err(Error::InvalidSource)?;
     let evidence = Evidence {
         id: Id::new(),
@@ -174,6 +190,7 @@ pub fn prepare_completion(
         "verified_at":evidence.verified_at});
     Ok(
         json!({"version":1,"stage":"report_validated","report_sha256":evidence.sha256,
+        "warning":warning,
         "evidence":draft,"completion":completion,"verification_executed":false,
         "completion_claimed":false,"level_basis":"caller_assertion",
         "next_action":"record_evidence_then_complete_with_current_revision_and_owned_session"}),

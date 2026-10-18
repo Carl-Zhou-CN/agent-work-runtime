@@ -831,24 +831,30 @@ async fn report_preflight_derives_bytes_and_coverage_without_recording_evidence(
     let bytes = serde_json::to_vec(&report).unwrap();
     fs::write(f.root.join("report.json"), &bytes).unwrap();
     let args = json!({"work":"W","report":"report.json","evidence_key":"E","source_sha":SHA,"level":"locally_verified"});
-    // Preflight never rewrites the caller's file: a report without exactly
-    // one trailing newline is refused with the digest it would have.
-    let err = error(
-        call(&client, "awr_completion_prepare", args.clone()).await,
-        "InvalidInput",
-    );
-    let err_text = err["message"].as_str().unwrap_or_default();
-    assert!(err_text.contains("exactly one trailing newline"), "{err}");
+    // The canonical-form rule is advisory for this release: a report without
+    // a trailing newline (the json.dumps/JSON.stringify shape) still
+    // preflights, binds the digest to the exact stored bytes, and returns a
+    // warning naming the canonical form and the digest it would have. The
+    // caller's file is never rewritten.
+    let result = success(call(&client, "awr_completion_prepare", args.clone()).await);
+    let warning = result["warning"].as_str().unwrap();
+    assert!(warning.contains("no trailing newline"), "{warning}");
+    assert!(warning.contains("Advisory"), "{warning}");
     let normalized = [bytes.as_slice(), b"\n"].concat();
     assert!(
-        err_text.contains(&format!("{:x}", Sha256::digest(&normalized))),
-        "{err}"
+        warning.contains(&format!("{:x}", Sha256::digest(&normalized))),
+        "{warning}"
+    );
+    assert_eq!(
+        result["report_sha256"],
+        format!("{:x}", Sha256::digest(&bytes))
     );
     assert_eq!(fs::read(f.root.join("report.json")).unwrap(), bytes);
-    // The caller normalizes the report itself; the digest then binds to the
+    // The canonical form produces no warning; the digest binds to the
     // exact stored bytes.
     fs::write(f.root.join("report.json"), &normalized).unwrap();
     let result = success(call(&client, "awr_completion_prepare", args.clone()).await);
+    assert_eq!(result["warning"], Value::Null);
     assert_eq!(result["evidence"]["work"], "W");
     assert_eq!(result["evidence"].get("branch"), Some(&Value::Null));
     assert!(result["evidence"].get("work_item_key").is_none());
